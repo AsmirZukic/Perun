@@ -1,60 +1,74 @@
-# MyGraphicsLibrary
+# Perun Engine
 
-MyGraphicsLibrary is a C++ graphics library built using SDL (Simple DirectMedia Layer) that allows you to render and manipulate various shapes on the screen, such as rectangles, circles, and ellipses.
+**Perun** is a high-performance, modern C++ 2D Graphics Engine featuring OpenGL 4.5 rendering. It provides a robust foundation for building games and graphical applications with a clean, decoupled architecture.
+
+## Features
+
+- **Rendering**: Batch-ready 2D Quad Rendering using OpenGL 4.5 Core Profile.
+- **Windowing**: Cross-platform Window and Input management (via SDL2).
+- **Math**: Custom, test-driven standalone Math library (`Vector2`, `Matrix4`).
+- **Build System**: Modern CMake build system with `install` support.
 
 ## Prerequisites
 
-To use this library, you need to have the following installed:
+- **Compiler**: C++20 compliant compiler (`g++`, `clang++`, or `MSVC`).
+- **Tools**: `CMake` 3.14+, `Make` or `Ninja`.
+- **Libraries**:
+    - `SDL2` (Development files)
+    - `SDL2_image` (Development files)
+    - `OpenGL`
 
-- C++ compiler supporting C++11 or later
-- SDL2 library and its development files
+## Building
 
-## Installation
+```bash
+# Clone the repository
+git clone <repo-url> Perun
+cd Perun
 
-1. **Clone the repository:**
+# Configure and Build
+cmake -S . -B build
+cmake --build build
 
-   ```bash
-   git clone <repo_url>
-   ```
+# Run the Sandbox Example
+./build/PerunSandbox
+```
 
-2. **Build the project:**
+## Testing
 
-   Build the project using your preferred build system (e.g., Makefile, CMake, or IDE project).
+Perun uses **GoogleTest** for verification.
 
-3. **Link against the MyGraphicsLibrary:**
+```bash
+cd build
+ctest --output-on-failure
+```
 
-   - Add the include path to your project settings.
-   - Link against the generated library file.
+## Usage
 
-4. **Include SDL2 library:**
+Perun is designed to be used as a library.
 
-   Make sure to include the SDL2 library in your project as well.
+```cpp
+#include "Perun/Core/Window.h"
+#include "Perun/Graphics/Renderer.h"
 
-## Contributing
+int main() {
+    Perun::Core::Window window("My Game", 800, 600);
+    window.Init();
+    Perun::Renderer::Init();
 
-Contributions to MyGraphicsLibrary are welcome! If you'd like to contribute, please follow these steps:
+    while (!window.ShouldClose()) {
+        window.PollEvents();
+        
+        Perun::Renderer::BeginScene(projectionMatrix);
+        Perun::Renderer::DrawQuad({0,0}, {1,1}, {1,0,0,1}); // Draw Red Quad
+        Perun::Renderer::EndScene();
+        
+        window.SwapBuffers();
+    }
+    
+    Perun::Renderer::Shutdown();
+    return 0;
+}
+```
 
-1. **Fork the repository.**
-
-2. **Create a new branch for your feature/fix:**
-
-   ```bash
-   git checkout -b feature/new-feature
-   ```
-
-3. **Commit your changes and push the branch:**
-
-   ```bash
-   git commit -m "Add new feature"
-   git push origin feature/new-feature
-   ```
-
-4. **Submit a pull request:**
-
-   Submit a pull request detailing your changes and their benefits.
-
-## Contact
-
-If you have any questions, suggestions, or feedback, please feel free to reach out to me at [your-email@example.com](mailto:asmir.zukic@outlook.com).
-
----
+## License
+MIT
