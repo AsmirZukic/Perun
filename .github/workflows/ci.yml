@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main", "dev", "feature/*" ]
+  pull_request:
+    branches: [ "main", "dev" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libsdl2-dev libsdl2-image-dev
+
+    - name: Configure CMake
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Test
+      # Using xvfb-run to support tests that might initialize video subsystems
+      run: |
+        sudo apt-get install -y xvfb
+        xvfb-run --auto-servernum --server-args='-screen 0 1024x768x24' ctest --test-dir build --output-on-failure
