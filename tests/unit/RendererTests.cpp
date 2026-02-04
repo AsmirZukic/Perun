@@ -30,6 +30,7 @@ TEST_F(RendererTest, Lifecycle) {
     Renderer::BeginScene(Math::Matrix4::Identity());
     float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     Renderer::DrawQuad({0.0f, 0.0f}, {1.0f, 1.0f}, color);
+    Renderer::DrawCircle({0.5f, 0.5f}, 0.5f, color);
     Renderer::EndScene();
 
     Renderer::Shutdown();
