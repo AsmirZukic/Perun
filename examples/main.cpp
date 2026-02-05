@@ -9,6 +9,8 @@
 #include "Perun/Math/Matrix4.h"
 #include "Perun/ImGui/ImGuiLayer.h"
 
+#include "Perun/Audio/Audio.h"
+
 int main(int argc, char* argv[]) {
     Perun::Core::Window window("Perun Emulator Test", 800, 600);
     
@@ -17,6 +19,10 @@ int main(int argc, char* argv[]) {
     }
     
     Perun::Renderer::Init();
+    if (!Perun::Audio::Init()) {
+        std::cerr << "Audio Init Failed!" << std::endl;
+    }
+
     Perun::ImGuiLayer::Init(window.GetNativeWindow(), window.GetContext());
 
     // Create a "Screen" Texture (64x32)
@@ -41,10 +47,15 @@ int main(int argc, char* argv[]) {
             }
         }
         
-        if (window.IsKeyDown(SDL_SCANCODE_RIGHT)) posX += 0.01f;
-        if (window.IsKeyDown(SDL_SCANCODE_LEFT)) posX -= 0.01f;
-        if (window.IsKeyDown(SDL_SCANCODE_UP)) posY += 0.01f;
-        if (window.IsKeyDown(SDL_SCANCODE_DOWN)) posY -= 0.01f;
+        bool moved = false;
+        if (window.IsKeyDown(SDL_SCANCODE_RIGHT)) { posX += 0.01f; moved = true; }
+        if (window.IsKeyDown(SDL_SCANCODE_LEFT)) { posX -= 0.01f; moved = true; }
+        if (window.IsKeyDown(SDL_SCANCODE_UP)) { posY += 0.01f; moved = true; }
+        if (window.IsKeyDown(SDL_SCANCODE_DOWN)) { posY -= 0.01f; moved = true; }
+        
+        if (moved) {
+            Perun::Audio::PlayTone(440, 50); // Beep on move
+        }
 
         // Dynamic Texture Update
         for (auto& pixel : pixels) {
@@ -67,6 +78,9 @@ int main(int argc, char* argv[]) {
         ImGui::Begin("Emulator Control");
         ImGui::Text("Status: Running");
         ImGui::SliderFloat("Position X", &posX, -1.0f, 1.0f);
+        if (ImGui::Button("Beep")) {
+            Perun::Audio::PlayTone(880, 100);
+        }
         ImGui::End();
 
         Perun::ImGuiLayer::End(); // Renders ImGui
@@ -74,6 +88,7 @@ int main(int argc, char* argv[]) {
     }
 
     Perun::ImGuiLayer::Shutdown();
+    Perun::Audio::Shutdown();
     Perun::Renderer::Shutdown();
     return 0;
 }

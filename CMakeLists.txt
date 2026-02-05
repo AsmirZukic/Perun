@@ -45,6 +45,7 @@ file(GLOB_RECURSE SOURCES
     "src/Graphics/*.cpp"
     "src/Math/*.cpp"
     "src/ImGui/*.cpp"
+    "src/Audio/*.cpp"
 )
 
 # Main Library Target
