@@ -116,6 +116,10 @@ target_link_libraries(PerunSandbox PRIVATE Perun)
 #     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 #     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 # )
+# IPC Server (Universal Frontend)
+add_executable(perun-server src/Server/main.cpp)
+target_link_libraries(perun-server PRIVATE Perun)
+target_link_libraries(perun-server PRIVATE rt) # Realtime library for shm
 
 # install(DIRECTORY include/Perun
 #     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
