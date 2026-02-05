@@ -21,6 +21,10 @@ public:
 
     std::pair<int, int> GetMousePosition() const;
     bool IsMouseButtonDown(int button) const;
+    bool IsKeyDown(int scancode) const;
+
+    SDL_Window* GetNativeWindow() const { return m_Window; }
+    void* GetContext() const { return m_Context; }
 
 private:
     std::string m_Title;

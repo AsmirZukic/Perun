@@ -92,4 +92,9 @@ bool Window::IsMouseButtonDown(int button) const {
     return (buttons & SDL_BUTTON(button)) != 0;
 }
 
+bool Window::IsKeyDown(int scancode) const {
+    const Uint8* state = SDL_GetKeyboardState(nullptr);
+    return state[scancode];
+}
+
 } // namespace Perun::Core

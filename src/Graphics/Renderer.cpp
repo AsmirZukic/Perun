@@ -3,6 +3,7 @@
 #include "Perun/Graphics/Buffers.h"
 #include <memory>
 #include <glad/glad.h>
+#include "Perun/Graphics/Texture.h"
 #include <iostream>
 
 namespace Perun {
@@ -12,6 +13,7 @@ struct Renderer::RendererData {
     std::unique_ptr<Graphics::VertexBuffer> QuadVertexBuffer;
     std::unique_ptr<Graphics::IndexBuffer> QuadIndexBuffer;
     std::unique_ptr<Graphics::Shader> FlatColorShader;
+    std::unique_ptr<Graphics::Shader> TextureShader;
     std::unique_ptr<Graphics::Shader> CircleShader;
     Math::Matrix4 ViewProjection;
 };
@@ -66,6 +68,40 @@ void Renderer::Init() {
     )";
 
     s_Data->FlatColorShader = std::make_unique<Graphics::Shader>(vertexSrc, fragmentSrc);
+
+    // Texture Shader
+    std::string textureVertexSrc = R"(
+        #version 450 core
+        layout(location = 0) in vec2 a_Position;
+        
+        uniform mat4 u_ViewProjection;
+        uniform mat4 u_Transform;
+        
+        out vec2 v_TexCoord;
+
+        void main() {
+            v_TexCoord = a_Position + 0.5;
+            gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 0.0, 1.0);
+        }
+    )";
+
+    std::string textureFragmentSrc = R"(
+        #version 450 core
+        layout(location = 0) out vec4 color;
+        
+        in vec2 v_TexCoord;
+        
+        uniform sampler2D u_Texture;
+        uniform vec4 u_Tint;
+
+        void main() {
+            color = texture(u_Texture, v_TexCoord) * u_Tint;
+        }
+    )";
+    
+    s_Data->TextureShader = std::make_unique<Graphics::Shader>(textureVertexSrc, textureFragmentSrc);
+    s_Data->TextureShader->Bind();
+    s_Data->TextureShader->SetInt("u_Texture", 0);
 
     // Circle Shader
     std::string circleVertexSrc = R"(
@@ -140,6 +176,24 @@ void Renderer::DrawQuad(const Math::Vector2& position, const Math::Vector2& size
     // Calculate Transform
     Math::Matrix4 transform = Math::Matrix4::Translate(position) * Math::Matrix4::Scale(size);
     s_Data->FlatColorShader->SetMat4("u_Transform", transform);
+
+    s_Data->QuadVertexArray->Bind();
+    glDrawElements(GL_TRIANGLES, s_Data->QuadIndexBuffer->GetCount(), GL_UNSIGNED_INT, nullptr);
+}
+
+void Renderer::DrawQuad(const Math::Vector2& position, const Math::Vector2& size, const Graphics::Texture2D& texture, const float tintColor[4]) {
+    s_Data->TextureShader->Bind();
+    s_Data->TextureShader->SetMat4("u_ViewProjection", s_Data->ViewProjection); // Should be global?
+
+    if (tintColor)
+        s_Data->TextureShader->SetFloat4("u_Tint", tintColor[0], tintColor[1], tintColor[2], tintColor[3]);
+    else
+        s_Data->TextureShader->SetFloat4("u_Tint", 1.0f, 1.0f, 1.0f, 1.0f);
+
+    texture.Bind(0);
+
+    Math::Matrix4 transform = Math::Matrix4::Translate(position) * Math::Matrix4::Scale(size);
+    s_Data->TextureShader->SetMat4("u_Transform", transform);
 
     s_Data->QuadVertexArray->Bind();
     glDrawElements(GL_TRIANGLES, s_Data->QuadIndexBuffer->GetCount(), GL_UNSIGNED_INT, nullptr);
