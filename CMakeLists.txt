@@ -70,6 +70,7 @@ add_executable(UnitTests
     tests/unit/Vector2Tests.cpp
     tests/unit/Matrix4Tests.cpp
     tests/unit/RendererTests.cpp
+    tests/unit/FramebufferTests.cpp
 )
 
 target_link_libraries(UnitTests PRIVATE Perun GTest::gtest_main)

@@ -53,6 +53,10 @@ bool Window::Init() {
 
     glViewport(0, 0, m_Width, m_Height);
     
+    // Enable Alpha Blending for Circles/Text
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    
     return true;
 }
 
@@ -72,6 +76,20 @@ void Window::PollEvents() {
             glViewport(0, 0, m_Width, m_Height);
         }
     }
+}
+
+
+
+std::pair<int, int> Window::GetMousePosition() const {
+    int x, y;
+    SDL_GetMouseState(&x, &y);
+    return {x, y};
+}
+
+bool Window::IsMouseButtonDown(int button) const {
+    int x, y;
+    uint32_t buttons = SDL_GetMouseState(&x, &y);
+    return (buttons & SDL_BUTTON(button)) != 0;
 }
 
 } // namespace Perun::Core
