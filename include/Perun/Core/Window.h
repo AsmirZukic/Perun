@@ -16,7 +16,11 @@ public:
     bool ShouldClose() const { return m_ShouldClose; }
     
     int GetWidth() const { return m_Width; }
+
     int GetHeight() const { return m_Height; }
+
+    std::pair<int, int> GetMousePosition() const;
+    bool IsMouseButtonDown(int button) const;
 
 private:
     std::string m_Title;
