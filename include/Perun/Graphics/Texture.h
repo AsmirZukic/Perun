@@ -14,7 +14,7 @@ public:
     uint32_t GetHeight() const { return m_Height; }
     uint32_t GetRendererID() const { return m_RendererID; }
 
-    void SetData(void* data, uint32_t size);
+    void SetData(const void* data, uint32_t size);
 
     void Bind(uint32_t slot = 0) const;
 

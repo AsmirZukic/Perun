@@ -24,7 +24,7 @@ Texture2D::~Texture2D() {
     glDeleteTextures(1, &m_RendererID);
 }
 
-void Texture2D::SetData(void* data, uint32_t size) {
+void Texture2D::SetData(const void* data, uint32_t size) {
     uint32_t bpp = m_DataFormat == GL_RGBA ? 4 : 3;
     if (size != m_Width * m_Height * bpp) {
         std::cerr << "Data size must be entire texture!" << std::endl;

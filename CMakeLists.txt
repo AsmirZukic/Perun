@@ -46,6 +46,7 @@ file(GLOB_RECURSE SOURCES
     "src/Math/*.cpp"
     "src/ImGui/*.cpp"
     "src/Audio/*.cpp"
+    "src/C/*.cpp"
 )
 
 # Main Library Target
@@ -95,6 +96,7 @@ add_executable(UnitTests
     tests/unit/RendererTests.cpp
     tests/unit/FramebufferTests.cpp
     tests/unit/TextureTests.cpp
+    tests/unit/AudioTests.cpp
 )
 
 target_link_libraries(UnitTests PRIVATE Perun GTest::gtest_main)
@@ -119,8 +121,8 @@ target_link_libraries(PerunSandbox PRIVATE Perun)
 #     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 # )
 
-# install(EXPORT PerunTargets
-#     FILE PerunTargets.cmake
-#     NAMESPACE Perun::
-#     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Perun
-# )
+# C-API Verification
+add_executable(PerunCTest tests/c_shim/test.c)
+target_link_libraries(PerunCTest PRIVATE Perun)
+set_target_properties(PerunCTest PROPERTIES LINKER_LANGUAGE CXX) # Link C++ stdlib
+
