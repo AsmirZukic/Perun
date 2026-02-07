@@ -4,6 +4,7 @@
 #include "Perun/Server/Server.h"
 #include "Perun/Transport/UnixTransport.h"
 #include "Perun/Transport/TCPTransport.h"
+#include "Perun/Transport/WebSocketTransport.h"
 #include "Perun/C/perun_c.h"
 #include <SDL2/SDL.h>
 #include "Perun/Audio/Audio.h"
@@ -24,23 +25,18 @@ public:
     
     void OnVideoFrameReceived(int clientId, const Perun::Protocol::VideoFramePacket& packet) override {
         // Update screen with received frame data
-        // For now, assuming raw RGBA data in compressedData (no actual compression in this demo phase)
         if (m_screen && packet.compressedData.size() == 640 * 480 * 4) {
             Perun_Texture_SetData(m_screen, packet.compressedData.data(), packet.compressedData.size());
         }
-        // std::cout << "[Demo] Received video frame from client " << clientId << ", size: " << packet.compressedData.size() << std::endl;
     }
 
     void OnAudioChunkReceived(int clientId, const Perun::Protocol::AudioChunkPacket& packet) override {
         // Handle audio
-        // std::cout << "[Demo] Received audio chunk from client " << clientId << ", samples: " << packet.samples.size() << std::endl;
     }
 
     void OnInputReceived(int clientId, const Perun::Protocol::InputEventPacket& packet) override {
         std::cout << "[Demo] Input from client " << clientId
                   << ", buttons: 0x" << std::hex << packet.buttons << std::dec << std::endl;
-        
-        // Could handle input here (e.g., pass to emulator core)
     }
     
     void OnConfigReceived(int clientId, const std::vector<uint8_t>& data) override {
@@ -57,11 +53,12 @@ void PrintUsage(const char* progName) {
               << "Options:\n"
               << "  -u, --unix <path>      Listen on Unix socket (default: /tmp/perun.sock)\n"
               << "  -t, --tcp <addr:port>  Listen on TCP socket (e.g., 127.0.0.1:8080)\n"
+              << "  -w, --ws <port>        Listen on WebSocket port (e.g., :8081)\n"
               << "  -h, --help             Show this help message\n"
               << "\nExamples:\n"
               << "  " << progName << " --unix /tmp/perun.sock\n"
               << "  " << progName << " --tcp :8080\n"
-              << "  " << progName << " --unix /tmp/perun.sock --tcp :8080\n";
+              << "  " << progName << " --unix /tmp/perun.sock --tcp :8080 --ws :8081\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -86,6 +83,9 @@ int main(int argc, char* argv[]) {
         else if ((arg == "-t" || arg == "--tcp") && i + 1 < argc) {
             transports.push_back({"tcp", argv[++i]});
         }
+        else if ((arg == "-w" || arg == "--ws") && i + 1 < argc) {
+            transports.push_back({"ws", argv[++i]});
+        }
         else {
             std::cerr << "Unknown argument: " << arg << std::endl;
             PrintUsage(argv[0]);
@@ -93,7 +93,7 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    // Default to Unix socket if no transports specified
+    // Default to Unix + TCP if no transports specified
     if (transports.empty()) {
         transports.push_back({"unix", "/tmp/perun.sock"});
     }
@@ -156,6 +156,13 @@ int main(int argc, char* argv[]) {
             auto transport = std::make_shared<Perun::Transport::TCPTransport>();
             if (!server.AddTransport(transport, address)) {
                 std::cerr << "Failed to add TCP transport: " << address << std::endl;
+                return 1;
+            }
+        }
+        else if (type == "ws") {
+            auto transport = std::make_shared<Perun::Transport::WebSocketTransport>();
+            if (!server.AddTransport(transport, address)) {
+                std::cerr << "Failed to add WebSocket transport: " << address << std::endl;
                 return 1;
             }
         }
