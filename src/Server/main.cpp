@@ -1,196 +1,190 @@
 #include <iostream>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <unistd.h>
+#include <memory>
 #include <cstring>
-#include <cerrno>
+#include "Perun/Server/Server.h"
+#include "Perun/Transport/UnixTransport.h"
+#include "Perun/Transport/TCPTransport.h"
 #include "Perun/C/perun_c.h"
 #include <SDL2/SDL.h>
-#include <arpa/inet.h>
 #include "Perun/Audio/Audio.h"
 
-// Constants
-const char* SHM_NAME = "/perun_shm";
-const size_t SHM_SIZE = 4 * 1024 * 1024; // 4MB
+// Simple callback implementation for demonstration
+class DemoCallbacks : public Perun::Server::IServerCallbacks {
+public:
+    DemoCallbacks(PerunTexture* screen) : m_screen(screen) {}
+    
+    void OnClientConnected(int clientId, uint16_t capabilities) override {
+        std::cout << "[Demo] Client " << clientId << " connected with caps: 0x"
+                  << std::hex << capabilities << std::dec << std::endl;
+    }
+    
+    void OnClientDisconnected(int clientId) override {
+        std::cout << "[Demo] Client " << clientId << " disconnected" << std::endl;
+    }
+    
+    void OnInputReceived(int clientId, const Perun::Protocol::InputEventPacket& packet) override {
+        std::cout << "[Demo] Input from client " << clientId
+                  << ", buttons: 0x" << std::hex << packet.buttons << std::dec << std::endl;
+        
+        // Could handle input here (e.g., pass to emulator core)
+    }
+    
+    void OnConfigReceived(int clientId, const std::vector<uint8_t>& data) override {
+        std::cout << "[Demo] Config from client " << clientId
+                  << ", size: " << data.size() << " bytes" << std::endl;
+    }
 
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
-#include <fcntl.h>
+private:
+    PerunTexture* m_screen;
+};
 
-const char* SOCKET_PATH = "/tmp/perun.sock";
-
-void SetNonBlocking(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+void PrintUsage(const char* progName) {
+    std::cout << "Usage: " << progName << " [options]\n"
+              << "Options:\n"
+              << "  -u, --unix <path>      Listen on Unix socket (default: /tmp/perun.sock)\n"
+              << "  -t, --tcp <addr:port>  Listen on TCP socket (e.g., 127.0.0.1:8080)\n"
+              << "  -h, --help             Show this help message\n"
+              << "\nExamples:\n"
+              << "  " << progName << " --unix /tmp/perun.sock\n"
+              << "  " << progName << " --tcp :8080\n"
+              << "  " << progName << " --unix /tmp/perun.sock --tcp :8080\n";
 }
 
 int main(int argc, char* argv[]) {
-    std::cout << "[PerunServer] Starting..." << std::endl;
-
-    // 1. Initialize Engine
+    std::cout << "[PerunServer] Starting Universal Emulator Frontend Platform..." << std::endl;
+    
+    // Parse command-line arguments
+    std::vector<std::pair<std::string, std::string>> transports;  // (type, address)
+    
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        
+        if (arg == "-h" || arg == "--help") {
+            PrintUsage(argv[0]);
+            return 0;
+        }
+        else if ((arg == "-u" || arg == "--unix") && i + 1 < argc) {
+            transports.push_back({"unix", argv[++i]});
+        }
+        else if ((arg == "-t" || arg == "--tcp") && i + 1 < argc) {
+            transports.push_back({"tcp", argv[++i]});
+        }
+        else {
+            std::cerr << "Unknown argument: " << arg << std::endl;
+            PrintUsage(argv[0]);
+            return 1;
+        }
+    }
+    
+    // Default to Unix socket if no transports specified
+    if (transports.empty()) {
+        transports.push_back({"unix", "/tmp/perun.sock"});
+    }
+    
+    // Initialize Engine
     if (!Perun_Init()) {
         std::cerr << "Failed to init Perun" << std::endl;
         return 1;
     }
-
+    
     PerunWindow* window = Perun_Window_Create("Perun Universal Frontend", 640, 480);
     if (!Perun_Window_Init(window)) {
-         std::cerr << "Failed to init Window" << std::endl;
-         return 1;
+        std::cerr << "Failed to init Window" << std::endl;
+        return 1;
     }
+    
     Perun_Renderer_Init();
+    
     if (!Perun::Audio::Init()) {
-         std::cerr << "Failed to init Audio" << std::endl;
-    }
-
-    // 2. Setup Shared Memory
-    int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
-    if (shm_fd == -1) {
-        std::cerr << "Shared Memory Open Failed: " << strerror(errno) << std::endl;
-        return 1;
-    }
-    ftruncate(shm_fd, SHM_SIZE);
-    
-    void* shm_ptr = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    if (shm_ptr == MAP_FAILED) {
-        std::cerr << "Memory Map Failed" << std::endl;
-        return 1;
-    }
-    std::cout << "[PerunServer] Shared Memory initialized at " << SHM_NAME << std::endl;
-
-    // 3. Setup Socket
-    int server_sock = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (server_sock == -1) {
-        perror("Socket error");
-        return 1;
+        std::cerr << "Failed to init Audio" << std::endl;
     }
     
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, SOCKET_PATH, sizeof(addr.sun_path)-1);
-    unlink(SOCKET_PATH); // Remove old socket
-
-    if (bind(server_sock, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
-        perror("Bind error");
-        return 1;
-    }
-
-    if (listen(server_sock, 5) == -1) {
-        perror("Listen error");
-        return 1;
-    }
-    SetNonBlocking(server_sock);
-    std::cout << "[PerunServer] Listening on " << SOCKET_PATH << std::endl;
-
-    // Create a texture (start black)
+    // Create texture for rendering
     PerunTexture* screen = Perun_Texture_Create(640, 480);
-    int client_fd = -1;
-
-    Perun_Window_SetEventCallback(window, [](void* eventPtr, void* userData) {
-        // std::cout << "Event!" << std::endl;
-        SDL_Event* e = (SDL_Event*)eventPtr;
-        int* sock = (int*)userData;
-        if (!sock || *sock == -1) return;
-
-        if (e->type == SDL_KEYDOWN || e->type == SDL_KEYUP) {
-             // Just print for now
-             // std::cout << "Key Event detected!" << std::endl;
-             
-            struct __attribute__((packed)) {
-                char type;
-                uint8_t pressed;
-                uint16_t scancode;
-            } packet;
-            packet.type = 'K';
-            packet.pressed = (e->type == SDL_KEYDOWN) ? 1 : 0;
-            packet.scancode = htons((uint16_t)e->key.keysym.scancode);
-            
-            // Check if send is the issue
-            send(*sock, &packet, sizeof(packet), MSG_NOSIGNAL);
+    
+    // Create demo frame data (gradient pattern)
+    std::vector<uint8_t> frameData(640 * 480 * 4);
+    for (int y = 0; y < 480; ++y) {
+        for (int x = 0; x < 640; ++x) {
+            int i = (y * 640 + x) * 4;
+            frameData[i + 0] = x % 256;      // R
+            frameData[i + 1] = y % 256;      // G
+            frameData[i + 2] = (x + y) % 256; // B
+            frameData[i + 3] = 255;           // A
         }
-    }, &client_fd);
-
-    // 4. Main Loop
-    std::cout << "[PerunServer] Waiting for updates..." << std::endl;
+    }
+    
+    // Create server and setup callbacks
+    Perun::Server::Server server;
+    DemoCallbacks callbacks(screen);
+    server.SetCallbacks(&callbacks);
+    
+    // Add configured transports
+    for (const auto& [type, address] : transports) {
+        if (type == "unix") {
+            auto transport = std::make_shared<Perun::Transport::UnixTransport>();
+            if (!server.AddTransport(transport, address)) {
+                std::cerr << "Failed to add Unix transport: " << address << std::endl;
+                return 1;
+            }
+        }
+        else if (type == "tcp") {
+            auto transport = std::make_shared<Perun::Transport::TCPTransport>();
+            if (!server.AddTransport(transport, address)) {
+                std::cerr << "Failed to add TCP transport: " << address << std::endl;
+                return 1;
+            }
+        }
+    }
+    
+    // Start server
+    if (!server.Start()) {
+        std::cerr << "Failed to start server" << std::endl;
+        return 1;
+    }
+    
+    std::cout << "[PerunServer] Server started, waiting for connections..." << std::endl;
+    
+    // Main loop
     bool running = true;
+    int frameCount = 0;
+    
     while (running) {
-        // Accept new connection if none
-        if (client_fd == -1) {
-            client_fd = accept(server_sock, NULL, NULL);
-            if (client_fd != -1) {
-                SetNonBlocking(client_fd);
-                std::cout << "[PerunServer] Client Connected!" << std::endl;
-            }
+        // Process server events (accept connections, receive packets)
+        server.Update();
+        
+        // Broadcast a frame every 60 frames (~1 second at 60 FPS)
+        if (frameCount % 60 == 0 && server.GetClientCount() > 0) {
+            Perun::Protocol::VideoFramePacket packet;
+            packet.width = 640;
+            packet.height = 480;
+            packet.compressedData = frameData;  // In real usage, compress with LZ4
+            
+            server.BroadcastVideoFrame(packet);
+            std::cout << "[PerunServer] Broadcasted frame to " << server.GetClientCount() << " client(s)" << std::endl;
         }
-
-
-
-        // Read Commands
-        if (client_fd != -1) {
-            while (true) {
-                char type;
-                int n = read(client_fd, &type, 1);
-                if (n > 0) {
-                    if (type == 'U') {
-                        // Update Texture
-                        Perun_Texture_SetData(screen, shm_ptr, 640 * 480 * 4);
-                    } else if (type == 'S') {
-                        // Sound Control
-                        uint8_t enable;
-                        // For 'S', we expect 1 more byte. It should be available immediately usually.
-                        // But strictly we should handle partial reads. For now assume atomic send.
-                        if (read(client_fd, &enable, 1) > 0) {
-                            if (enable) {
-                                Perun::Audio::PlayTone(440, 1000000); 
-                            } else {
-                                Perun::Audio::PlayTone(0, 0);
-                            }
-                        }
-                    }
-                } else if (n == 0) {
-                    // Disconnected
-                    close(client_fd);
-                    client_fd = -1;
-                    std::cout << "[PerunServer] Client Disconnected" << std::endl;
-                    break;
-                } else {
-                    // n == -1
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                        break; // No more data
-                    } else {
-                        // Error
-                         close(client_fd);
-                         client_fd = -1;
-                         break;
-                    }
-                }
-            }
-        } else {
-             // Fallback auto-update if no client (for debug)
-             Perun_Texture_SetData(screen, shm_ptr, 640 * 480 * 4);
-        }
-
+        
+        // Update texture (for now just use demo data)
+        Perun_Texture_SetData(screen, frameData.data(), frameData.size());
+        
+        // Render
         Perun_Renderer_BeginScene();
-        Perun_Renderer_DrawTexture(0, 0, 1.0f, 1.0f, screen); 
+        Perun_Renderer_DrawTexture(0, 0, 1.0f, 1.0f, screen);
         Perun_Renderer_EndScene();
-
+        
+        // Update window
         if (!Perun_Window_Update(window)) {
-            std::cout << "[PerunServer] Window Closed" << std::endl;
+            std::cout << "[PerunServer] Window closed" << std::endl;
             running = false;
         }
+        
+        frameCount++;
     }
-    std::cout << "[PerunServer] Main Loop Ended" << std::endl;
-
+    
+    std::cout << "[PerunServer] Shutting down..." << std::endl;
+    
     // Cleanup
-    if (client_fd != -1) close(client_fd);
-    close(server_sock);
-    unlink(SOCKET_PATH);
-    munmap(shm_ptr, SHM_SIZE);
-    close(shm_fd);
-    shm_unlink(SHM_NAME);
-
+    server.Stop();
     Perun_Renderer_Shutdown();
     Perun_Window_Destroy(window);
     Perun_Shutdown();

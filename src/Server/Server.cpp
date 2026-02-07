@@ -1,0 +1,301 @@
+#include "Perun/Server/Server.h"
+#include <iostream>
+#include <algorithm>
+
+namespace Perun::Server {
+
+Server::Server()
+    : m_callbacks(nullptr)
+    , m_nextClientId(1)
+    , m_running(false)
+    , m_serverCapabilities(Protocol::CAP_DELTA | Protocol::CAP_AUDIO | Protocol::CAP_DEBUG) {
+}
+
+Server::~Server() {
+    Stop();
+}
+
+bool Server::AddTransport(std::shared_ptr<Transport::ITransport> transport, const std::string& address) {
+    if (m_running) {
+        std::cerr << "[Server] Cannot add transport while server is running" << std::endl;
+        return false;
+    }
+    
+    if (!transport->Listen(address)) {
+        std::cerr << "[Server] Failed to listen on transport: " << address << std::endl;
+        return false;
+    }
+    
+    m_transports.push_back(transport);
+    std::cout << "[Server] Added transport listening on: " << address << std::endl;
+    return true;
+}
+
+void Server::SetCallbacks(IServerCallbacks* callbacks) {
+    m_callbacks = callbacks;
+}
+
+bool Server::Start() {
+    if (m_running) {
+        return true;
+    }
+    
+    if (m_transports.empty()) {
+        std::cerr << "[Server] No transports configured" << std::endl;
+        return false;
+    }
+    
+    m_running = true;
+    std::cout << "[Server] Started with " << m_transports.size() << " transport(s)" << std::endl;
+    return true;
+}
+
+void Server::Stop() {
+    if (!m_running) {
+        return;
+    }
+    
+    std::cout << "[Server] Stopping..." << std::endl;
+    
+    // Disconnect all clients
+    for (auto& client : m_clients) {
+        DisconnectClient(client);
+    }
+    m_clients.clear();
+    
+    // Close all transports
+    for (auto& transport : m_transports) {
+        transport->Close();
+    }
+    
+    m_running = false;
+    std::cout << "[Server] Stopped" << std::endl;
+}
+
+void Server::Update() {
+    if (!m_running) {
+        return;
+    }
+    
+    // Accept new connections
+    ProcessNewConnections();
+    
+    // Process data from existing clients
+    for (auto& client : m_clients) {
+        ProcessClientData(client);
+    }
+    
+    // Remove disconnected clients
+    m_clients.erase(
+        std::remove_if(m_clients.begin(), m_clients.end(),
+            [](const ClientState& c) { return !c.connection->IsOpen(); }),
+        m_clients.end()
+    );
+}
+
+void Server::ProcessNewConnections() {
+    for (auto& transport : m_transports) {
+        while (auto conn = transport->Accept()) {
+            ClientState client;
+            client.id = m_nextClientId++;
+            client.connection = conn;
+            client.capabilities = 0;
+            client.handshakeComplete = false;
+            
+            m_clients.push_back(client);
+            std::cout << "[Server] New connection, client ID: " << client.id << std::endl;
+        }
+    }
+}
+
+void Server::ProcessClientData(ClientState& client) {
+    if (!client.connection->IsOpen()) {
+        return;
+    }
+    
+    uint8_t buffer[4096];
+    ssize_t received = client.connection->Receive(buffer, sizeof(buffer));
+    
+    if (received <= 0) {
+        return;  // No data or error
+    }
+    
+    client.receiveBuffer.insert(client.receiveBuffer.end(), buffer, buffer + received);
+    
+    // Handle handshake first
+    if (!client.handshakeComplete) {
+        if (client.receiveBuffer.size() >= 15) {  // Minimum handshake size
+            auto result = Protocol::Handshake::ProcessHello(
+                client.receiveBuffer.data(),
+                client.receiveBuffer.size(),
+                m_serverCapabilities
+            );
+            
+            if (result.accepted) {
+                // Send OK response
+                auto response = Protocol::Handshake::CreateOk(result.version, result.capabilities);
+                client.connection->Send(response.data(), response.size());
+                
+                client.capabilities = result.capabilities;
+                client.handshakeComplete = true;
+                client.receiveBuffer.clear();
+                
+                std::cout << "[Server] Client " << client.id << " handshake complete, caps: 0x"
+                          << std::hex << client.capabilities << std::dec << std::endl;
+                
+                if (m_callbacks) {
+                    m_callbacks->OnClientConnected(client.id, client.capabilities);
+                }
+            } else {
+                // Send error response
+                auto response = Protocol::Handshake::CreateError(result.error);
+                client.connection->Send(response.data(), response.size());
+                client.connection->Close();
+                std::cerr << "[Server] Client " << client.id << " handshake failed: "
+                          << result.error << std::endl;
+            }
+        }
+        return;
+    }
+    
+    // Process packets
+    while (client.receiveBuffer.size() >= 8) {  // Minimum packet size (header)
+        auto header = Protocol::PacketHeader::Deserialize(client.receiveBuffer.data());
+        
+        if (client.receiveBuffer.size() < 8 + header.length) {
+            break;  // Wait for complete packet
+        }
+        
+        // Extract payload
+        const uint8_t* payload = client.receiveBuffer.data() + 8;
+        
+        // Handle packet
+        HandlePacket(client, header, payload);
+        
+        // Remove processed packet from buffer
+        client.receiveBuffer.erase(
+            client.receiveBuffer.begin(),
+            client.receiveBuffer.begin() + 8 + header.length
+        );
+    }
+}
+
+void Server::HandlePacket(ClientState& client, const Protocol::PacketHeader& header, const uint8_t* payload) {
+    if (!m_callbacks) {
+        return;
+    }
+    
+    switch (header.type) {
+        case Protocol::PacketType::InputEvent: {
+            auto packet = Protocol::InputEventPacket::Deserialize(payload, header.length);
+            m_callbacks->OnInputReceived(client.id, packet);
+            break;
+        }
+        
+        case Protocol::PacketType::Config: {
+            std::vector<uint8_t> data(payload, payload + header.length);
+            m_callbacks->OnConfigReceived(client.id, data);
+            break;
+        }
+        
+        default:
+            std::cerr << "[Server] Unhandled packet type: " << (int)header.type << std::endl;
+            break;
+    }
+}
+
+void Server::DisconnectClient(ClientState& client) {
+    if (client.connection->IsOpen()) {
+        client.connection->Close();
+        
+        if (m_callbacks && client.handshakeComplete) {
+            m_callbacks->OnClientDisconnected(client.id);
+        }
+        
+        std::cout << "[Server] Client " << client.id << " disconnected" << std::endl;
+    }
+}
+
+bool Server::SendPacket(ClientState& client, Protocol::PacketType type, const std::vector<uint8_t>& payload) {
+    if (!client.connection->IsOpen() || !client.handshakeComplete) {
+        return false;
+    }
+    
+    Protocol::PacketHeader header;
+    header.type = type;
+    header.flags = 0;
+    header.sequence = 0;  // TODO: Implement sequence tracking
+    header.length = payload.size();
+    
+    auto headerBytes = header.Serialize();
+    
+    // Send header
+    ssize_t sent = client.connection->Send(headerBytes.data(), headerBytes.size());
+    if (sent != headerBytes.size()) {
+        return false;
+    }
+    
+    // Send payload
+    if (!payload.empty()) {
+        sent = client.connection->Send(payload.data(), payload.size());
+        if (sent != (ssize_t)payload.size()) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+bool Server::SendVideoFrame(int clientId, const Protocol::VideoFramePacket& packet) {
+    auto it = std::find_if(m_clients.begin(), m_clients.end(),
+        [clientId](const ClientState& c) { return c.id == clientId; });
+    
+    if (it == m_clients.end()) {
+        return false;
+    }
+    
+    auto payload = packet.Serialize();
+    return SendPacket(*it, Protocol::PacketType::VideoFrame, payload);
+}
+
+void Server::BroadcastVideoFrame(const Protocol::VideoFramePacket& packet) {
+    auto payload = packet.Serialize();
+    
+    for (auto& client : m_clients) {
+        if (client.handshakeComplete) {
+            SendPacket(client, Protocol::PacketType::VideoFrame, payload);
+        }
+    }
+}
+
+bool Server::SendAudioChunk(int clientId, const Protocol::AudioChunkPacket& packet) {
+    auto it = std::find_if(m_clients.begin(), m_clients.end(),
+        [clientId](const ClientState& c) { return c.id == clientId; });
+    
+    if (it == m_clients.end()) {
+        return false;
+    }
+    
+    auto payload = packet.Serialize();
+    return SendPacket(*it, Protocol::PacketType::AudioChunk, payload);
+}
+
+void Server::BroadcastAudioChunk(const Protocol::AudioChunkPacket& packet) {
+    auto payload = packet.Serialize();
+    
+    for (auto& client : m_clients) {
+        if (client.handshakeComplete && (client.capabilities & Protocol::CAP_AUDIO)) {
+            SendPacket(client, Protocol::PacketType::AudioChunk, payload);
+        }
+    }
+}
+
+size_t Server::GetClientCount() const {
+    return m_clients.size();
+}
+
+bool Server::IsRunning() const {
+    return m_running;
+}
+
+} // namespace Perun::Server

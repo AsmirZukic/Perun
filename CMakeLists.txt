@@ -52,6 +52,9 @@ file(GLOB_RECURSE SOURCES
     "src/Transport/*.cpp"
 )
 
+# Add Server.cpp but not main.cpp (main.cpp is only for perun-server executable)
+list(APPEND SOURCES "src/Server/Server.cpp")
+
 # Main Library Target
 add_library(Perun 
     ${SOURCES}
