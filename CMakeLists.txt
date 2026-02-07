@@ -132,6 +132,7 @@ set_target_properties(PerunCTest PROPERTIES LINKER_LANGUAGE CXX) # Link C++ stdl
 # Transport Tests
 add_executable(TransportTests 
     tests/unit/transport/UnixTransportTests.cpp
+    tests/unit/transport/TCPTransportTests.cpp
 )
 
 target_link_libraries(TransportTests PRIVATE Perun GTest::gtest_main)
