@@ -14,6 +14,8 @@ from .protocol import (
     InputEventPacket,
     AudioChunkPacket,
     Handshake,
+    apply_delta,
+    compute_delta,
 )
 
 from .connection import PerunConnection
@@ -28,4 +30,6 @@ __all__ = [
     "AudioChunkPacket",
     "Handshake",
     "PerunConnection",
+    "apply_delta",
+    "compute_delta",
 ]

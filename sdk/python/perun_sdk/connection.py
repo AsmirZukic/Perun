@@ -169,21 +169,33 @@ class PerunConnection:
         
         Returns: (packet_type, payload) or None if no complete packet available
         """
+        result = self.receive_packet_header()
+        if result:
+            header, payload = result
+            return (header.type, payload)
+        return None
+
+    def receive_packet_header(self) -> Optional[tuple]:
+        """
+        Receive a packet including header (non-blocking)
+        
+        Returns: (PacketHeader, payload) or None
+        """
         if not self._socket:
             return None
         
         try:
-            # Try to read some data
-            data = self._socket.recv(4096)
-            if not data:
-                # Connection closed
-                self.close()
-                return None
-            
-            self._receive_buffer.extend(data)
-        except BlockingIOError:
-            # No data available (non-blocking)
-            pass
+            # Drain socket
+            while True:
+                try:
+                    data = self._socket.recv(65536)
+                    if not data:
+                        # Connection closed
+                        self.close()
+                        return None
+                    self._receive_buffer.extend(data)
+                except BlockingIOError:
+                    break
         except Exception as e:
             print(f"Receive error: {e}")
             self.close()
@@ -204,7 +216,7 @@ class PerunConnection:
         # Remove packet from buffer
         del self._receive_buffer[:8+header.length]
         
-        return (header.type, payload)
+        return (header, payload)
     
     def get_capabilities(self) -> int:
         """Get negotiated capabilities"""
