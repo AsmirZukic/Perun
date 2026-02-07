@@ -25,6 +25,7 @@ class Handshake {
 public:
     static std::vector<uint8_t> CreateHello(uint16_t version, uint16_t caps);
     static HandshakeResult ProcessHello(const uint8_t* data, size_t len, uint16_t serverCaps = CAP_DELTA | CAP_AUDIO | CAP_DEBUG);
+    static HandshakeResult ProcessResponse(const uint8_t* data, size_t len);
     static std::vector<uint8_t> CreateOk(uint16_t version, uint16_t caps);
     static std::vector<uint8_t> CreateError(const std::string& msg);
 };

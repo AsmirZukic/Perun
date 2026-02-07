@@ -7,8 +7,6 @@ TCP transport listening on: 0.0.0.0:8080
 [Server] Started with 2 transport(s)
 [PerunServer] Server started, waiting for connections...
 [Server] New connection, client ID: 1
-[Server] Client 1 handshake complete, caps: 0x1
-[Demo] Client 1 connected with caps: 0x1
-[PerunServer] Broadcasted frame to 1 client(s)
-[PerunServer] Broadcasted frame to 1 client(s)
+[Server] Client 1 handshake complete, caps: 0x7
+[Demo] Client 1 connected with caps: 0x7
 [PerunServer] Broadcasted frame to 1 client(s)

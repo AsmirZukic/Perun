@@ -63,6 +63,46 @@ HandshakeResult Handshake::ProcessHello(const uint8_t* data, size_t len, uint16_
     result.capabilities = negotiated;
     
     return result;
+    return result;
+}
+
+HandshakeResult Handshake::ProcessResponse(const uint8_t* data, size_t len) {
+    HandshakeResult result;
+    result.accepted = false;
+    result.version = 0;
+    result.capabilities = 0;
+    
+    if (len < 2) {
+        result.error = "Response too short";
+        return result;
+    }
+    
+    // Check for OK response
+    if (len >= 6 && data[0] == 'O' && data[1] == 'K') {
+        result.version = (data[2] << 8) | data[3];
+        result.capabilities = (data[4] << 8) | data[5];
+        result.accepted = true;
+        return result;
+    }
+    
+    // Check for ERROR response
+    if (len >= 5 && memcmp(data, "ERROR", 5) == 0) {
+        if (len > 5) {
+            // Read null-terminated string or until end
+            std::string msg(reinterpret_cast<const char*>(data + 5), len - 5);
+            // Remove null terminator if present at end
+            if (!msg.empty() && msg.back() == '\0') {
+                msg.pop_back();
+            }
+            result.error = msg;
+        } else {
+            result.error = "Unknown error";
+        }
+        return result;
+    }
+    
+    result.error = "Invalid response format";
+    return result;
 }
 
 std::vector<uint8_t> Handshake::CreateOk(uint16_t version, uint16_t caps) {

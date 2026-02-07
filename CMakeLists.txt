@@ -142,3 +142,17 @@ target_link_libraries(TransportTests PRIVATE Perun GTest::gtest_main)
 
 gtest_discover_tests(TransportTests)
 
+
+# Integration Client
+add_executable(IntegrationClient tests/integration/IntegrationClient.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(IntegrationClient PRIVATE Perun Threads::Threads)
+
+# Python Conformance Tests
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_FOUND)
+    add_test(NAME ConformanceTests
+             COMMAND ${Python3_EXECUTABLE}   "${CMAKE_SOURCE_DIR}/tests/conformance/conformance_suite.py"
+             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    set_tests_properties(ConformanceTests PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/sdk/python")
+endif()
