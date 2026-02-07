@@ -5,8 +5,43 @@
 #include <glad/glad.h>
 #include "Perun/Graphics/Texture.h"
 #include <iostream>
+#include <cstring>
+#include <cmath>
 
 namespace Perun {
+
+// Simple matrix and vector helpers to avoid Math library dependency
+namespace {
+    void MatrixIdentity(float out[16]) {
+        memset(out, 0, sizeof(float) * 16);
+        out[0] = out[5] = out[10] = out[15] = 1.0f;
+    }
+
+    void MatrixTranslate(float out[16], const float pos[2]) {
+        MatrixIdentity(out);
+        out[12] = pos[0];
+        out[13] = pos[1];
+    }
+
+    void MatrixScale(float out[16], const float scale[2]) {
+        MatrixIdentity(out);
+        out[0] = scale[0];
+        out[5] = scale[1];
+    }
+
+    void MatrixMultiply(float out[16], const float a[16], const float b[16]) {
+        float result[16];
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                result[i * 4 + j] = 0;
+                for (int k = 0; k < 4; k++) {
+                    result[i * 4 + j] += a[i * 4 + k] * b[k * 4 + j];
+                }
+            }
+        }
+        memcpy(out, result, sizeof(float) * 16);
+    }
+}
 
 struct Renderer::RendererData {
     std::unique_ptr<Graphics::VertexArray> QuadVertexArray;
@@ -15,7 +50,7 @@ struct Renderer::RendererData {
     std::unique_ptr<Graphics::Shader> FlatColorShader;
     std::unique_ptr<Graphics::Shader> TextureShader;
     std::unique_ptr<Graphics::Shader> CircleShader;
-    Math::Matrix4 ViewProjection;
+    float ViewProjection[16];
 };
 
 Renderer::RendererData* Renderer::s_Data = nullptr;
@@ -34,8 +69,6 @@ void Renderer::Init() {
 
     s_Data->QuadVertexBuffer = std::make_unique<Graphics::VertexBuffer>(vertices, sizeof(vertices));
     
-    // Setup Layout (Index 0, 2 floats)
-    // Note: Our "AddBuffer" in VertexArray currently hardcodes binding, which is fine for V0.1
     s_Data->QuadVertexArray->AddBuffer(*s_Data->QuadVertexBuffer);
 
     // Quad Indices
@@ -106,7 +139,7 @@ void Renderer::Init() {
     // Circle Shader
     std::string circleVertexSrc = R"(
         #version 450 core
-        layout(location = 0) in vec2 a_Position; // -0.5 to 0.5
+        layout(location = 0) in vec2 a_Position;
         
         uniform mat4 u_ViewProjection;
         uniform mat4 u_Transform;
@@ -114,7 +147,7 @@ void Renderer::Init() {
         out vec2 v_LocalPos;
 
         void main() {
-            v_LocalPos = a_Position * 2.0; // -1.0 to 1.0
+            v_LocalPos = a_Position * 2.0;
             gl_Position = u_ViewProjection * u_Transform * vec4(a_Position, 0.0, 1.0);
         }
     )";
@@ -130,7 +163,6 @@ void Renderer::Init() {
         uniform float u_Fade;
 
         void main() {
-            // Calculate distance to center (0,0)
             float distance = 1.0 - length(v_LocalPos);
             float circle = smoothstep(0.0, u_Fade, distance);
             circle *= smoothstep(u_Thickness + u_Fade, u_Thickness, distance);
@@ -150,11 +182,11 @@ void Renderer::Shutdown() {
     s_Data = nullptr;
 }
 
-void Renderer::BeginScene(const Math::Matrix4& projection) {
+void Renderer::BeginScene(const float projection[16]) {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    s_Data->ViewProjection = projection;
+    memcpy(s_Data->ViewProjection, projection, sizeof(float) * 16);
     s_Data->FlatColorShader->Bind();
     s_Data->FlatColorShader->SetMat4("u_ViewProjection", projection);
 }
@@ -163,30 +195,26 @@ void Renderer::EndScene() {
     // Flush if batching
 }
 
-void Renderer::DrawQuad(const Math::Vector2& position, const Math::Vector2& size, const float color[4]) {
+void Renderer::DrawQuad(const float position[2], const float size[2], const float color[4]) {
     s_Data->FlatColorShader->Bind();
     
-    // Set Color
-    // We don't have SetFloat4 yet in Shader, let's add it or just raw call for speed/time saving? 
-    // Wait, Shader class only has SetInt, SetFloat, SetMat4.
-    // Let's rely on raw GL for the color uniform locally or update Shader class.
-    // Updating Shader class is cleaner. 
-    // For now, I'll use glUniform4f directly via the Shader's location cache if it was public, but it's not.
-    // I SHOULD update Shader.h. but I am in Renderer.cpp. 
-    // Let's assume I will update Shader.h in a moment.
     s_Data->FlatColorShader->SetFloat4("u_Color", color[0], color[1], color[2], color[3]);
 
-    // Calculate Transform
-    Math::Matrix4 transform = Math::Matrix4::Translate(position) * Math::Matrix4::Scale(size);
+    // Calculate Transform: Translate * Scale
+    float translate[16], scale[16], transform[16];
+    MatrixTranslate(translate, position);
+    MatrixScale(scale, size);
+    MatrixMultiply(transform, translate, scale);
+    
     s_Data->FlatColorShader->SetMat4("u_Transform", transform);
 
     s_Data->QuadVertexArray->Bind();
     glDrawElements(GL_TRIANGLES, s_Data->QuadIndexBuffer->GetCount(), GL_UNSIGNED_INT, nullptr);
 }
 
-void Renderer::DrawQuad(const Math::Vector2& position, const Math::Vector2& size, const Graphics::Texture2D& texture, const float tintColor[4]) {
+void Renderer::DrawQuad(const float position[2], const float size[2], const Graphics::Texture2D& texture, const float tintColor[4]) {
     s_Data->TextureShader->Bind();
-    s_Data->TextureShader->SetMat4("u_ViewProjection", s_Data->ViewProjection); // Should be global?
+    s_Data->TextureShader->SetMat4("u_ViewProjection", s_Data->ViewProjection);
 
     if (tintColor)
         s_Data->TextureShader->SetFloat4("u_Tint", tintColor[0], tintColor[1], tintColor[2], tintColor[3]);
@@ -195,38 +223,32 @@ void Renderer::DrawQuad(const Math::Vector2& position, const Math::Vector2& size
 
     texture.Bind(0);
 
-    Math::Matrix4 transform = Math::Matrix4::Translate(position) * Math::Matrix4::Scale(size);
+    float translate[16], scale[16], transform[16];
+    MatrixTranslate(translate, position);
+    MatrixScale(scale, size);
+    MatrixMultiply(transform, translate, scale);
+    
     s_Data->TextureShader->SetMat4("u_Transform", transform);
 
     s_Data->QuadVertexArray->Bind();
     glDrawElements(GL_TRIANGLES, s_Data->QuadIndexBuffer->GetCount(), GL_UNSIGNED_INT, nullptr);
 }
 
-void Renderer::DrawCircle(const Math::Vector2& position, float radius, const float color[4], float thickness, float fade) {
+void Renderer::DrawCircle(const float position[2], float radius, const float color[4], float thickness, float fade) {
     s_Data->CircleShader->Bind();
     
     s_Data->CircleShader->SetFloat4("u_Color", color[0], color[1], color[2], color[3]);
     s_Data->CircleShader->SetFloat("u_Thickness", thickness);
     s_Data->CircleShader->SetFloat("u_Fade", fade);
 
-    // Calculate Transform (Quad is 1x1, scale by diameter = radius * 2)
-    Math::Matrix4 transform = Math::Matrix4::Translate(position) * Math::Matrix4::Scale({radius * 2.0f, radius * 2.0f});
-    
-    // We assume BeginScene set u_ViewProjection but it was set for FlatColorShader.
-    // Ideally BeginScene sets strict global UBOs or we set it here.
-    // For now we need to store VP or pass it?
-    // Quick hack: BeginScene assumes only one shader. 
-    // We need to set VP for CircleShader too. 
-    // We will store VP in s_Data.
-    // BUT we don't have stored VP in s_Data yet!
-    // Let's rely on stored VP or ... wait.
-    // BeginScene takes projection.
+    // Calculate Transform (scale by diameter = radius * 2)
+    float scaleVec[2] = {radius * 2.0f, radius * 2.0f};
+    float translate[16], scale[16], transform[16];
+    MatrixTranslate(translate, position);
+    MatrixScale(scale, scaleVec);
+    MatrixMultiply(transform, translate, scale);
     
     s_Data->CircleShader->SetMat4("u_Transform", transform);
-    // Missing u_ViewProjection!
-    // We MUST store ViewProjection in RendererData or passed to DrawCircle?
-    // Passed to DrawCircle is ugly.
-    // Stored in RendererData is correct.
     s_Data->CircleShader->SetMat4("u_ViewProjection", s_Data->ViewProjection);
 
     s_Data->QuadVertexArray->Bind();

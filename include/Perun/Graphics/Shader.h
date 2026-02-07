@@ -3,7 +3,6 @@
 #include <string>
 #include <unordered_map>
 #include <glad/glad.h>
-#include "Perun/Math/Matrix4.h"
 
 namespace Perun::Graphics {
 
@@ -19,7 +18,7 @@ public:
     void SetInt(const std::string& name, int value);
     void SetFloat(const std::string& name, float value);
     void SetFloat4(const std::string& name, float v0, float v1, float v2, float v3);
-    void SetMat4(const std::string& name, const Math::Matrix4& matrix);
+    void SetMat4(const std::string& name, const float matrix[16]);
 
 private:
     uint32_t m_RendererID;

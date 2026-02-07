@@ -6,8 +6,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Dependencies
-find_package(SDL2 REQUIRED)
-find_package(SDL2_image REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SDL2 REQUIRED sdl2)
+pkg_check_modules(SDL2_IMAGE REQUIRED SDL2_image)
 find_package(OpenGL REQUIRED)
 
 # GLAD (OpenGL Loader) - Fetching a CMake-ready version or header-only
@@ -70,20 +71,8 @@ target_include_directories(Perun PUBLIC
     "${imgui_SOURCE_DIR}/backends"
 )
 
-# Robust linking: use targets if available, else variables
-if(TARGET SDL2::SDL2)
-    target_link_libraries(Perun PUBLIC SDL2::SDL2)
-else()
-    target_link_libraries(Perun PUBLIC ${SDL2_LIBRARIES})
-endif()
-
-if(TARGET SDL2_image::SDL2_image)
-    target_link_libraries(Perun PUBLIC SDL2_image::SDL2_image)
-elseif(TARGET SDL2::SDL2_image)
-    target_link_libraries(Perun PUBLIC SDL2::SDL2_image)
-else()
-    target_link_libraries(Perun PUBLIC ${SDL2_IMAGE_LIBRARIES})
-endif()
+# Link SDL2 and SDL2_image using pkg-config variables
+target_link_libraries(Perun PUBLIC ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES})
 
 target_link_libraries(Perun PUBLIC OpenGL::GL glad)
 
@@ -91,8 +80,6 @@ target_link_libraries(Perun PUBLIC OpenGL::GL glad)
 enable_testing()
 
 add_executable(UnitTests 
-    tests/unit/Vector2Tests.cpp
-    tests/unit/Matrix4Tests.cpp
     tests/unit/RendererTests.cpp
     tests/unit/FramebufferTests.cpp
     tests/unit/TextureTests.cpp
@@ -104,9 +91,7 @@ target_link_libraries(UnitTests PRIVATE Perun GTest::gtest_main)
 include(GoogleTest)
 gtest_discover_tests(UnitTests)
 
-# Example App
-add_executable(PerunSandbox examples/main.cpp)
-target_link_libraries(PerunSandbox PRIVATE Perun)
+
 
 # Installation
 # include(GNUInstallDirs)

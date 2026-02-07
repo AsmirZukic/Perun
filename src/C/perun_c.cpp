@@ -3,7 +3,6 @@
 #include "Perun/Core/Window.h"
 #include "Perun/Graphics/Renderer.h"
 #include "Perun/Graphics/Texture.h"
-#include "Perun/Math/Matrix4.h"
 
 #include <iostream>
 
@@ -74,8 +73,14 @@ void Perun_Renderer_Shutdown() {
 }
 
 void Perun_Renderer_BeginScene() {
-    // Default projection for now (Identity) - mapped to -1..1
-    Renderer::BeginScene(Math::Matrix4::Identity());
+    // Identity matrix projection
+    float identity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    Renderer::BeginScene(identity);
 }
 
 void Perun_Renderer_EndScene() {
@@ -84,7 +89,9 @@ void Perun_Renderer_EndScene() {
 
 void Perun_Renderer_DrawTexture(float x, float y, float w, float h, PerunTexture* texture) {
     if (texture && texture->cppTexture) {
-        Renderer::DrawQuad({x, y}, {w, h}, *texture->cppTexture);
+        float pos[2] = {x, y};
+        float size[2] = {w, h};
+        Renderer::DrawQuad(pos, size, *texture->cppTexture);
     }
 }
 

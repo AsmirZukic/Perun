@@ -26,11 +26,22 @@ TEST_F(RendererTest, Lifecycle) {
     // Just verify we can Init and Shutdown without crashing
     Renderer::Init();
     
+    // Identity matrix for projection
+    float identity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    
     // Draw something (should not crash)
-    Renderer::BeginScene(Math::Matrix4::Identity());
+    Renderer::BeginScene(identity);
     float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    Renderer::DrawQuad({0.0f, 0.0f}, {1.0f, 1.0f}, color);
-    Renderer::DrawCircle({0.5f, 0.5f}, 0.5f, color);
+    float pos1[2] = {0.0f, 0.0f};
+    float size1[2] = {1.0f, 1.0f};
+    float pos2[2] = {0.5f, 0.5f};
+    Renderer::DrawQuad(pos1, size1, color);
+    Renderer::DrawCircle(pos2, 0.5f, color);
     Renderer::EndScene();
 
     Renderer::Shutdown();
