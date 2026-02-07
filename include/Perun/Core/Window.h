@@ -2,6 +2,7 @@
 
 #include <string>
 #include <SDL2/SDL.h>
+#include <functional>
 
 namespace Perun::Core {
 
@@ -13,6 +14,7 @@ public:
     bool Init();
     void SwapBuffers();
     void PollEvents();
+    void SetEventCallback(const std::function<void(const SDL_Event&)>& callback) { m_EventCallback = callback; }
     bool ShouldClose() const { return m_ShouldClose; }
     
     int GetWidth() const { return m_Width; }
@@ -34,6 +36,8 @@ private:
 
     SDL_Window* m_Window = nullptr;
     SDL_GLContext m_Context = nullptr;
+
+    std::function<void(const SDL_Event&)> m_EventCallback;
 };
 
 } // namespace Perun::Core

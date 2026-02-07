@@ -52,6 +52,19 @@ bool Perun_Window_Update(PerunWindow* window) {
     return !window->cppWindow->ShouldClose();
 }
 
+bool Perun_Window_IsKeyDown(PerunWindow* window, int scancode) {
+    if (!window || !window->cppWindow) return false;
+    return window->cppWindow->IsKeyDown(scancode);
+}
+
+void Perun_Window_SetEventCallback(PerunWindow* window, PerunEventCallback callback, void* userData) {
+    if (window && window->cppWindow) {
+        window->cppWindow->SetEventCallback([callback, userData](const SDL_Event& e) {
+             if (callback) callback((void*)&e, userData);
+        });
+    }
+}
+
 void Perun_Renderer_Init() {
     Renderer::Init();
 }

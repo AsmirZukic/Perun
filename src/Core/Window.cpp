@@ -67,6 +67,10 @@ void Window::SwapBuffers() {
 void Window::PollEvents() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        if (m_EventCallback) {
+            m_EventCallback(event);
+        }
+
         if (event.type == SDL_QUIT) {
             m_ShouldClose = true;
         }

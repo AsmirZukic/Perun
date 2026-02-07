@@ -151,6 +151,9 @@ void Renderer::Shutdown() {
 }
 
 void Renderer::BeginScene(const Math::Matrix4& projection) {
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
     s_Data->ViewProjection = projection;
     s_Data->FlatColorShader->Bind();
     s_Data->FlatColorShader->SetMat4("u_ViewProjection", projection);

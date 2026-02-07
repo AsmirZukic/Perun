@@ -10,6 +10,7 @@ extern "C" {
 // Opaque handles
 typedef struct PerunWindow PerunWindow;
 typedef struct PerunTexture PerunTexture;
+typedef void (*PerunEventCallback)(void* event, void* userData); // Void* event is actually SDL_Event*
 
 // Core
 bool Perun_Init();
@@ -20,6 +21,8 @@ PerunWindow* Perun_Window_Create(const char* title, int width, int height);
 void Perun_Window_Destroy(PerunWindow* window);
 bool Perun_Window_Update(PerunWindow* window); // Returns false if should close
 bool Perun_Window_Init(PerunWindow* window);
+bool Perun_Window_IsKeyDown(PerunWindow* window, int scancode);
+void Perun_Window_SetEventCallback(PerunWindow* window, PerunEventCallback callback, void* userData);
 
 // Graphics (Context must be active)
 void Perun_Renderer_Init();

@@ -5,6 +5,9 @@
 #include <cstring>
 #include <cerrno>
 #include "Perun/C/perun_c.h"
+#include <SDL2/SDL.h>
+#include <arpa/inet.h>
+#include "Perun/Audio/Audio.h"
 
 // Constants
 const char* SHM_NAME = "/perun_shm";
@@ -37,6 +40,9 @@ int main(int argc, char* argv[]) {
          return 1;
     }
     Perun_Renderer_Init();
+    if (!Perun::Audio::Init()) {
+         std::cerr << "Failed to init Audio" << std::endl;
+    }
 
     // 2. Setup Shared Memory
     int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
@@ -82,6 +88,30 @@ int main(int argc, char* argv[]) {
     PerunTexture* screen = Perun_Texture_Create(640, 480);
     int client_fd = -1;
 
+    Perun_Window_SetEventCallback(window, [](void* eventPtr, void* userData) {
+        // std::cout << "Event!" << std::endl;
+        SDL_Event* e = (SDL_Event*)eventPtr;
+        int* sock = (int*)userData;
+        if (!sock || *sock == -1) return;
+
+        if (e->type == SDL_KEYDOWN || e->type == SDL_KEYUP) {
+             // Just print for now
+             // std::cout << "Key Event detected!" << std::endl;
+             
+            struct __attribute__((packed)) {
+                char type;
+                uint8_t pressed;
+                uint16_t scancode;
+            } packet;
+            packet.type = 'K';
+            packet.pressed = (e->type == SDL_KEYDOWN) ? 1 : 0;
+            packet.scancode = htons((uint16_t)e->key.keysym.scancode);
+            
+            // Check if send is the issue
+            send(*sock, &packet, sizeof(packet), MSG_NOSIGNAL);
+        }
+    }, &client_fd);
+
     // 4. Main Loop
     std::cout << "[PerunServer] Waiting for updates..." << std::endl;
     bool running = true;
@@ -95,19 +125,47 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Read Commands (Simple "Frame Ready" byte for now)
+
+
+        // Read Commands
         if (client_fd != -1) {
-            char buf[1];
-            int n = read(client_fd, buf, 1);
-            if (n > 0) {
-                // Command received, update texture from SHM
-                Perun_Texture_SetData(screen, shm_ptr, 640 * 480 * 4);
-                // Maybe send back input state here
-            } else if (n == 0) {
-                // Disconnected
-                close(client_fd);
-                client_fd = -1;
-                std::cout << "[PerunServer] Client Disconnected" << std::endl;
+            while (true) {
+                char type;
+                int n = read(client_fd, &type, 1);
+                if (n > 0) {
+                    if (type == 'U') {
+                        // Update Texture
+                        Perun_Texture_SetData(screen, shm_ptr, 640 * 480 * 4);
+                    } else if (type == 'S') {
+                        // Sound Control
+                        uint8_t enable;
+                        // For 'S', we expect 1 more byte. It should be available immediately usually.
+                        // But strictly we should handle partial reads. For now assume atomic send.
+                        if (read(client_fd, &enable, 1) > 0) {
+                            if (enable) {
+                                Perun::Audio::PlayTone(440, 1000000); 
+                            } else {
+                                Perun::Audio::PlayTone(0, 0);
+                            }
+                        }
+                    }
+                } else if (n == 0) {
+                    // Disconnected
+                    close(client_fd);
+                    client_fd = -1;
+                    std::cout << "[PerunServer] Client Disconnected" << std::endl;
+                    break;
+                } else {
+                    // n == -1
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        break; // No more data
+                    } else {
+                        // Error
+                         close(client_fd);
+                         client_fd = -1;
+                         break;
+                    }
+                }
             }
         } else {
              // Fallback auto-update if no client (for debug)
@@ -119,9 +177,11 @@ int main(int argc, char* argv[]) {
         Perun_Renderer_EndScene();
 
         if (!Perun_Window_Update(window)) {
+            std::cout << "[PerunServer] Window Closed" << std::endl;
             running = false;
         }
     }
+    std::cout << "[PerunServer] Main Loop Ended" << std::endl;
 
     // Cleanup
     if (client_fd != -1) close(client_fd);
