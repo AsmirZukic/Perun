@@ -48,6 +48,7 @@ file(GLOB_RECURSE SOURCES
     "src/ImGui/*.cpp"
     "src/Audio/*.cpp"
     "src/C/*.cpp"
+    "src/Protocol/*.cpp"
 )
 
 # Main Library Target
@@ -78,7 +79,19 @@ target_link_libraries(Perun PUBLIC OpenGL::GL glad)
 
 # Testing
 enable_testing()
+include(GoogleTest)
 
+# Protocol Tests
+add_executable(ProtocolTests 
+    tests/unit/protocol/PacketsTests.cpp
+    tests/unit/protocol/HandshakeTests.cpp
+)
+
+target_link_libraries(ProtocolTests PRIVATE Perun GTest::gtest_main)
+
+gtest_discover_tests(ProtocolTests)
+
+# Graphics/Audio Tests
 add_executable(UnitTests 
     tests/unit/RendererTests.cpp
     tests/unit/FramebufferTests.cpp
@@ -88,7 +101,6 @@ add_executable(UnitTests
 
 target_link_libraries(UnitTests PRIVATE Perun GTest::gtest_main)
 
-include(GoogleTest)
 gtest_discover_tests(UnitTests)
 
 
