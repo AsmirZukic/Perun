@@ -113,14 +113,46 @@ void Server::ProcessClientData(ClientState& client) {
         return;
     }
     
-    uint8_t buffer[4096];
-    ssize_t received = client.connection->Receive(buffer, sizeof(buffer));
+    uint8_t buffer[65536]; // Increased buffer size to 64KB
+    bool dataReceived = false;
     
-    if (received <= 0) {
-        return;  // No data or error
+    // Drain the socket
+    while (true) {
+        ssize_t received = client.connection->Receive(buffer, sizeof(buffer));
+        
+        if (received < 0) {
+            // Error handling (Receive returns -1 on error and closes connection)
+            // If connection is closed, we should disconnect client state
+            if (!client.connection->IsOpen()) {
+               DisconnectClient(client);
+               return; 
+            }
+            break; 
+        }
+        else if (received == 0) {
+            // Could be EAGAIN (0) or Disconnected (0 and closed)
+            if (!client.connection->IsOpen()) {
+                // Disconnected
+                DisconnectClient(client);
+                return;
+            }
+            // Just no more data (EAGAIN)
+            break;
+        }
+        
+        // Append to buffer
+        client.receiveBuffer.insert(client.receiveBuffer.end(), buffer, buffer + received);
+        dataReceived = true;
+        
+        // If we received less than max buffer, socket might be empty now
+        if (received < (ssize_t)sizeof(buffer)) {
+            break;
+        }
     }
     
-    client.receiveBuffer.insert(client.receiveBuffer.end(), buffer, buffer + received);
+    if (!dataReceived) {
+        return;
+    }
     
     // Handle handshake first
     if (!client.handshakeComplete) {
@@ -186,6 +218,18 @@ void Server::HandlePacket(ClientState& client, const Protocol::PacketHeader& hea
     }
     
     switch (header.type) {
+        case Protocol::PacketType::VideoFrame: {
+            auto packet = Protocol::VideoFramePacket::Deserialize(payload, header.length);
+            m_callbacks->OnVideoFrameReceived(client.id, packet);
+            break;
+        }
+
+        case Protocol::PacketType::AudioChunk: {
+            auto packet = Protocol::AudioChunkPacket::Deserialize(payload, header.length);
+            m_callbacks->OnAudioChunkReceived(client.id, packet);
+            break;
+        }
+
         case Protocol::PacketType::InputEvent: {
             auto packet = Protocol::InputEventPacket::Deserialize(payload, header.length);
             m_callbacks->OnInputReceived(client.id, packet);

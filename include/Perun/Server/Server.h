@@ -30,6 +30,20 @@ public:
     virtual void OnClientDisconnected(int clientId) = 0;
     
     /**
+     * @brief Called when video frame is received
+     * @param clientId Client that sent the frame
+     * @param packet Video frame packet
+     */
+    virtual void OnVideoFrameReceived(int clientId, const Protocol::VideoFramePacket& packet) = 0;
+
+    /**
+     * @brief Called when audio chunk is received
+     * @param clientId Client that sent the audio
+     * @param packet Audio chunk packet
+     */
+    virtual void OnAudioChunkReceived(int clientId, const Protocol::AudioChunkPacket& packet) = 0;
+
+    /**
      * @brief Called when input event packet is received
      * @param clientId Client that sent the input
      * @param packet Input event packet

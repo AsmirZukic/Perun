@@ -1,0 +1,14 @@
+[PerunServer] Starting Universal Emulator Frontend Platform...
+[PerunServer] Running in headless mode
+Unix transport listening on: /tmp/perun.sock
+[Server] Added transport listening on: /tmp/perun.sock
+TCP transport listening on: 0.0.0.0:8080
+[Server] Added transport listening on: :8080
+[Server] Started with 2 transport(s)
+[PerunServer] Server started, waiting for connections...
+[Server] New connection, client ID: 1
+[Server] Client 1 handshake complete, caps: 0x1
+[Demo] Client 1 connected with caps: 0x1
+[PerunServer] Broadcasted frame to 1 client(s)
+[PerunServer] Broadcasted frame to 1 client(s)
+[PerunServer] Broadcasted frame to 1 client(s)

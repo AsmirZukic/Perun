@@ -140,9 +140,23 @@ class PerunConnection:
             )
             self._sequence += 1
             
-            # Send header + payload
+            # Send header + payload matching non-blocking socket behavior
+            # We want to ensure the whole packet is sent, so we handle partial sends
             data = header.serialize() + payload
-            self._socket.sendall(data)
+            total_sent = 0
+            
+            import select
+            
+            while total_sent < len(data):
+                try:
+                    sent = self._socket.send(data[total_sent:])
+                    if sent == 0:
+                        raise ConnectionError("Socket closed during send")
+                    total_sent += sent
+                except BlockingIOError:
+                    # Wait for socket to be writable
+                    select.select([], [self._socket], [], 1.0)  # 1s timeout
+            
             return True
         except Exception as e:
             print(f"Send failed: {e}")

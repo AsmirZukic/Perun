@@ -1,0 +1,4 @@
+[TestCore] Starting Perun SDK test core
+Handshake successful, caps: 0x0001
+[TestCore] Connected! Supports delta: True
+[TestCore] Sent frame 0

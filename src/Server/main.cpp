@@ -22,6 +22,20 @@ public:
         std::cout << "[Demo] Client " << clientId << " disconnected" << std::endl;
     }
     
+    void OnVideoFrameReceived(int clientId, const Perun::Protocol::VideoFramePacket& packet) override {
+        // Update screen with received frame data
+        // For now, assuming raw RGBA data in compressedData (no actual compression in this demo phase)
+        if (m_screen && packet.compressedData.size() == 640 * 480 * 4) {
+            Perun_Texture_SetData(m_screen, packet.compressedData.data(), packet.compressedData.size());
+        }
+        // std::cout << "[Demo] Received video frame from client " << clientId << ", size: " << packet.compressedData.size() << std::endl;
+    }
+
+    void OnAudioChunkReceived(int clientId, const Perun::Protocol::AudioChunkPacket& packet) override {
+        // Handle audio
+        // std::cout << "[Demo] Received audio chunk from client " << clientId << ", samples: " << packet.samples.size() << std::endl;
+    }
+
     void OnInputReceived(int clientId, const Perun::Protocol::InputEventPacket& packet) override {
         std::cout << "[Demo] Input from client " << clientId
                   << ", buttons: 0x" << std::hex << packet.buttons << std::dec << std::endl;
@@ -53,7 +67,7 @@ void PrintUsage(const char* progName) {
 int main(int argc, char* argv[]) {
     std::cout << "[PerunServer] Starting Universal Emulator Frontend Platform..." << std::endl;
     
-    // Parse command-line arguments
+    bool headless = false;
     std::vector<std::pair<std::string, std::string>> transports;  // (type, address)
     
     for (int i = 1; i < argc; ++i) {
@@ -62,6 +76,9 @@ int main(int argc, char* argv[]) {
         if (arg == "-h" || arg == "--help") {
             PrintUsage(argv[0]);
             return 0;
+        }
+        else if (arg == "--headless") {
+            headless = true;
         }
         else if ((arg == "-u" || arg == "--unix") && i + 1 < argc) {
             transports.push_back({"unix", argv[++i]});
@@ -87,20 +104,27 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    PerunWindow* window = Perun_Window_Create("Perun Universal Frontend", 640, 480);
-    if (!Perun_Window_Init(window)) {
-        std::cerr << "Failed to init Window" << std::endl;
-        return 1;
+    PerunWindow* window = nullptr;
+    PerunTexture* screen = nullptr;
+    
+    if (!headless) {
+        window = Perun_Window_Create("Perun Universal Frontend", 640, 480);
+        if (!Perun_Window_Init(window)) {
+            std::cerr << "Failed to init Window" << std::endl;
+            return 1;
+        }
+        
+        Perun_Renderer_Init();
+        
+        // Create texture for rendering
+        screen = Perun_Texture_Create(640, 480);
+    } else {
+        std::cout << "[PerunServer] Running in headless mode" << std::endl;
     }
     
-    Perun_Renderer_Init();
-    
-    if (!Perun::Audio::Init()) {
+    if (!headless && !Perun::Audio::Init()) {
         std::cerr << "Failed to init Audio" << std::endl;
     }
-    
-    // Create texture for rendering
-    PerunTexture* screen = Perun_Texture_Create(640, 480);
     
     // Create demo frame data (gradient pattern)
     std::vector<uint8_t> frameData(640 * 480 * 4);
@@ -164,18 +188,26 @@ int main(int argc, char* argv[]) {
             std::cout << "[PerunServer] Broadcasted frame to " << server.GetClientCount() << " client(s)" << std::endl;
         }
         
-        // Update texture (for now just use demo data)
-        Perun_Texture_SetData(screen, frameData.data(), frameData.size());
-        
-        // Render
-        Perun_Renderer_BeginScene();
-        Perun_Renderer_DrawTexture(0, 0, 1.0f, 1.0f, screen);
-        Perun_Renderer_EndScene();
-        
-        // Update window
-        if (!Perun_Window_Update(window)) {
-            std::cout << "[PerunServer] Window closed" << std::endl;
-            running = false;
+        if (!headless) {
+            // Update texture (for now just use demo data)
+            Perun_Texture_SetData(screen, frameData.data(), frameData.size());
+            
+            // Render
+            Perun_Renderer_BeginScene();
+            Perun_Renderer_DrawTexture(0, 0, 1.0f, 1.0f, screen);
+            Perun_Renderer_EndScene();
+            
+            // Update window
+            if (!Perun_Window_Update(window)) {
+                std::cout << "[PerunServer] Window closed" << std::endl;
+                running = false;
+            }
+        } else {
+            // In headless mode, just sleep to simulate frame time
+            SDL_Delay(16); // ~60 FPS
+            
+            // Basic event polling to allow graceful exit via Ctrl+C handling or similar if implemented
+            // For now, we rely on signal handling or external kill for headless termination
         }
         
         frameCount++;
@@ -185,8 +217,10 @@ int main(int argc, char* argv[]) {
     
     // Cleanup
     server.Stop();
-    Perun_Renderer_Shutdown();
-    Perun_Window_Destroy(window);
+    if (!headless) {
+        Perun_Renderer_Shutdown();
+        Perun_Window_Destroy(window);
+    }
     Perun_Shutdown();
     
     return 0;
