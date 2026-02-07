@@ -49,6 +49,7 @@ file(GLOB_RECURSE SOURCES
     "src/Audio/*.cpp"
     "src/C/*.cpp"
     "src/Protocol/*.cpp"
+    "src/Transport/*.cpp"
 )
 
 # Main Library Target
@@ -126,4 +127,14 @@ target_link_libraries(perun-server PRIVATE rt) # Realtime library for shm
 add_executable(PerunCTest tests/c_shim/test.c)
 target_link_libraries(PerunCTest PRIVATE Perun)
 set_target_properties(PerunCTest PROPERTIES LINKER_LANGUAGE CXX) # Link C++ stdlib
+
+
+# Transport Tests
+add_executable(TransportTests 
+    tests/unit/transport/UnixTransportTests.cpp
+)
+
+target_link_libraries(TransportTests PRIVATE Perun GTest::gtest_main)
+
+gtest_discover_tests(TransportTests)
 
