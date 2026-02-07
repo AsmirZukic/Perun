@@ -156,3 +156,7 @@ if(Python3_FOUND)
              WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     set_tests_properties(ConformanceTests PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/sdk/python")
 endif()
+
+# Native Client
+add_executable(perun-client src/Client/main.cpp src/Client/Client.cpp)
+target_link_libraries(perun-client PRIVATE Perun)

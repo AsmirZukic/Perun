@@ -1,4 +1,1 @@
-[TestCore] Starting Perun SDK test core
-Handshake successful, caps: 0x0001
-[TestCore] Connected! Supports delta: True
-[TestCore] Sent frame 0
+Failed to create window: OpenGL support is either not configured in SDL or not available in current SDL video driver (dummy) or platform
