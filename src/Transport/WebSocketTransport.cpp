@@ -11,6 +11,9 @@
 #include <iostream>
 #include <algorithm>
 #include <sstream>
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h>
 
 namespace Perun {
 namespace Transport {
@@ -60,8 +63,23 @@ void WebSocketConnection::SetCloseCallback(CloseCallback callback) {
     m_closeCallback = callback;
 }
 
-ssize_t WebSocketConnection::Send(const uint8_t* data, size_t length) {
-    if (!m_open || !m_handshakeComplete) return -1;
+ssize_t WebSocketConnection::Send(const uint8_t* data, size_t length, bool reliable) {
+    if (!m_open || !m_handshakeComplete) {
+        return -1;
+    }
+
+    // For unreliable sending (VideoFrames), check queue size BEFORE allocating frame
+    if (!reliable) {
+        int unsent = 0;
+        if (ioctl(m_fd, SIOCOUTQ, &unsent) == 0) {
+            // If more than 64KB (approx 8 video frames) is pending, drop this frame
+            if (unsent > 65536) {
+                return 0;
+            }
+        } else {
+             return 0;
+        }
+    }
 
     // Wrap in WebSocket Frame (Binary 0x82)
     std::vector<uint8_t> frame;
@@ -92,10 +110,37 @@ ssize_t WebSocketConnection::Send(const uint8_t* data, size_t length) {
         ssize_t sent = send(m_fd, p, left, MSG_NOSIGNAL);
         if (sent < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Busy wait or return partial?
-                // For simplicity, we assume we can write or fail.
-                // Returning partial write for a frame is bad because next Send call will start new frame.
-                // Real implementation should buffer outgoing frames.
+                // Socket buffer full
+                if (!reliable) {
+                    // For unreliable sends: if we already sent partial data, we have a problem
+                    // But if we haven't sent anything yet, just drop the frame
+                    if (totalSent == 0) {
+                        return 0; // Drop frame, no blocking
+                    }
+                    // Partial send already occurred - must complete to avoid corruption
+                    // Use a very short wait (1ms) and try once more
+                    struct pollfd pfd;
+                    pfd.fd = m_fd;
+                    pfd.events = POLLOUT;
+                    pfd.revents = 0;
+                    int result = poll(&pfd, 1, 1); // 1ms max wait
+                    if (result <= 0) {
+                        // Can't complete - close to avoid corruption
+                        Close();
+                        return -1;
+                    }
+                    continue;
+                }
+                // For reliable sends, wait until we can send (but with short timeout)
+                struct pollfd pfd;
+                pfd.fd = m_fd;
+                pfd.events = POLLOUT;
+                pfd.revents = 0;
+                int result = poll(&pfd, 1, 10); // 10ms max wait for reliable
+                if (result <= 0) {
+                    Close();
+                    return -1;
+                }
                 continue; 
             }
             Close();
@@ -108,6 +153,7 @@ ssize_t WebSocketConnection::Send(const uint8_t* data, size_t length) {
     
     return length; // Return logical bytes sent
 }
+
 
 ssize_t WebSocketConnection::Receive(uint8_t* buffer, size_t maxLength) {
     if (!m_open) return -1;

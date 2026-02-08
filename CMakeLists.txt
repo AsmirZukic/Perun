@@ -7,22 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Dependencies
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED sdl2)
-pkg_check_modules(SDL2_IMAGE REQUIRED SDL2_image)
-find_package(OpenGL REQUIRED)
-
-# GLAD (OpenGL Loader) - Fetching a CMake-ready version or header-only
-# For simplicity, we will fetch a repo that provides GLAD
-include(FetchContent)
-
-FetchContent_Declare(
-    glad
-    GIT_REPOSITORY https://github.com/Dav1dde/glad.git
-    GIT_TAG v0.1.34
-)
-FetchContent_MakeAvailable(glad)
 
 # GoogleTest
+include(FetchContent)
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
@@ -30,56 +17,23 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# Dear ImGui
-# We need to expose SDL2 and OpenGL3 backend files
-FetchContent_Declare(
-    imgui
-    GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG v1.90.4-docking
-)
-FetchContent_MakeAvailable(imgui)
-
 
 # Library Source Files
 file(GLOB_RECURSE SOURCES 
-    "src/Core/*.cpp"
-    "src/Graphics/*.cpp"
-    "src/Math/*.cpp"
-    "src/ImGui/*.cpp"
-    "src/Audio/*.cpp"
-    "src/C/*.cpp"
     "src/Protocol/*.cpp"
     "src/Transport/*.cpp"
 )
 
-# Add Server.cpp but not main.cpp (main.cpp is only for perun-server executable)
+# Add Server.cpp but not main.cpp
 list(APPEND SOURCES "src/Server/Server.cpp")
 
 # Main Library Target
-add_library(Perun 
-    ${SOURCES}
-    "${imgui_SOURCE_DIR}/imgui.cpp"
-    "${imgui_SOURCE_DIR}/imgui_draw.cpp"
-    "${imgui_SOURCE_DIR}/imgui_tables.cpp"
-    "${imgui_SOURCE_DIR}/imgui_widgets.cpp"
-    "${imgui_SOURCE_DIR}/imgui_demo.cpp"
-    "${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp"
-    "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp"
-)
+add_library(Perun ${SOURCES})
 
 target_include_directories(Perun PUBLIC 
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
-    ${SDL2_INCLUDE_DIRS}
-    ${SDL2_IMAGE_INCLUDE_DIRS}
-    "${imgui_SOURCE_DIR}"
-    "${imgui_SOURCE_DIR}/backends"
 )
-
-# Link SDL2 and SDL2_image using pkg-config variables
-target_link_libraries(Perun PUBLIC ${SDL2_LIBRARIES} ${SDL2_IMAGE_LIBRARIES})
-
-target_link_libraries(Perun PUBLIC OpenGL::GL glad)
 
 # Testing
 enable_testing()
@@ -90,63 +44,21 @@ add_executable(ProtocolTests
     tests/unit/protocol/PacketsTests.cpp
     tests/unit/protocol/HandshakeTests.cpp
 )
-
 target_link_libraries(ProtocolTests PRIVATE Perun GTest::gtest_main)
-
 gtest_discover_tests(ProtocolTests)
-
-# Graphics/Audio Tests
-add_executable(UnitTests 
-    tests/unit/RendererTests.cpp
-    tests/unit/FramebufferTests.cpp
-    tests/unit/TextureTests.cpp
-    tests/unit/AudioTests.cpp
-)
-
-target_link_libraries(UnitTests PRIVATE Perun GTest::gtest_main)
-
-gtest_discover_tests(UnitTests)
-
-
-
-# Installation
-# include(GNUInstallDirs)
-
-# install(TARGETS Perun
-#     EXPORT PerunTargets
-#     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-#     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-# )
-# IPC Server (Universal Frontend)
-add_executable(perun-server src/Server/main.cpp)
-target_link_libraries(perun-server PRIVATE Perun)
-target_link_libraries(perun-server PRIVATE rt) # Realtime library for shm
-
-# install(DIRECTORY include/Perun
-#     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-# )
-
-# C-API Verification
-add_executable(PerunCTest tests/c_shim/test.c)
-target_link_libraries(PerunCTest PRIVATE Perun)
-set_target_properties(PerunCTest PROPERTIES LINKER_LANGUAGE CXX) # Link C++ stdlib
-
 
 # Transport Tests
 add_executable(TransportTests 
     tests/unit/transport/UnixTransportTests.cpp
     tests/unit/transport/TCPTransportTests.cpp
 )
-
 target_link_libraries(TransportTests PRIVATE Perun GTest::gtest_main)
-
 gtest_discover_tests(TransportTests)
 
-
-# Integration Client
-add_executable(IntegrationClient tests/integration/IntegrationClient.cpp)
-find_package(Threads REQUIRED)
-target_link_libraries(IntegrationClient PRIVATE Perun Threads::Threads)
+# IPC Server (Relay)
+add_executable(perun-server src/Server/main.cpp)
+target_link_libraries(perun-server PRIVATE Perun)
+target_link_libraries(perun-server PRIVATE rt) # Realtime library for shm/timers if needed
 
 # Python Conformance Tests
 find_package(Python3 COMPONENTS Interpreter)
@@ -156,7 +68,3 @@ if(Python3_FOUND)
              WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     set_tests_properties(ConformanceTests PROPERTIES ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/sdk/python")
 endif()
-
-# Native Client
-add_executable(perun-client src/Client/main.cpp src/Client/Client.cpp)
-target_link_libraries(perun-client PRIVATE Perun)

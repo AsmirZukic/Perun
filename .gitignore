@@ -26,5 +26,15 @@ _deps/
 .DS_Store
 Thumbs.db
 
-#python
+# Python
 __pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Testing artifacts
+Testing/
+
+/roms 
+/docs 

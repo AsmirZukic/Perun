@@ -13,7 +13,7 @@ public:
     explicit UnixConnection(int fd);
     ~UnixConnection() override;
     
-    ssize_t Send(const uint8_t* data, size_t length) override;
+    ssize_t Send(const uint8_t* data, size_t length, bool reliable = true) override;
     ssize_t Receive(uint8_t* buffer, size_t maxLength) override;
     void Close() override;
     bool IsOpen() const override;

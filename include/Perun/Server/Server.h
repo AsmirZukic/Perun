@@ -101,6 +101,22 @@ public:
     void Update();
     
     /**
+     * @brief Wait for activity on any connection using poll()
+     * @param timeoutMs Maximum time to wait in milliseconds (-1 for infinite)
+     * @return Number of file descriptors with activity, or 0 on timeout
+     * 
+     * Call this before Update() to efficiently wait for network events
+     * instead of using a fixed sleep interval.
+     */
+    int Poll(int timeoutMs = -1);
+    
+    /**
+     * @brief Get all file descriptors for external polling
+     * @return Vector of file descriptors for all transports and connections
+     */
+    std::vector<int> GetAllFileDescriptors() const;
+    
+    /**
      * @brief Send video frame to a specific client
      * @param clientId Client to send to
      * @param packet Video frame packet
@@ -111,8 +127,9 @@ public:
     /**
      * @brief Send video frame to all connected clients
      * @param packet Video frame packet
+     * @param excludeClientId Client ID to exclude from broadcast (optional)
      */
-    void BroadcastVideoFrame(const Protocol::VideoFramePacket& packet);
+    void BroadcastVideoFrame(const Protocol::VideoFramePacket& packet, int excludeClientId = -1);
     
     /**
      * @brief Send audio chunk to a specific client
@@ -125,8 +142,16 @@ public:
     /**
      * @brief Send audio chunk to all connected clients
      * @param packet Audio chunk packet
+     * @param excludeClientId Client ID to exclude from broadcast (optional)
      */
-    void BroadcastAudioChunk(const Protocol::AudioChunkPacket& packet);
+    void BroadcastAudioChunk(const Protocol::AudioChunkPacket& packet, int excludeClientId = -1);
+    
+    /**
+     * @brief Send input event to all connected clients (except sender if needed, but for now strict broadcast)
+     * @param packet Input event packet
+     * @param excludeClientId Client ID to exclude from broadcast (optional)
+     */
+    void BroadcastInputEvent(const Protocol::InputEventPacket& packet, int excludeClientId = -1);
     
     /**
      * @brief Get number of connected clients
@@ -151,7 +176,7 @@ private:
     void ProcessClientData(ClientState& client);
     void HandlePacket(ClientState& client, const Protocol::PacketHeader& header, const uint8_t* payload);
     void DisconnectClient(ClientState& client);
-    bool SendPacket(ClientState& client, Protocol::PacketType type, const std::vector<uint8_t>& payload);
+    bool SendPacket(ClientState& client, Protocol::PacketType type, const std::vector<uint8_t>& payload, bool reliable = true);
     
     std::vector<std::shared_ptr<Transport::ITransport>> m_transports;
     std::vector<ClientState> m_clients;

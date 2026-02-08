@@ -1,6 +1,8 @@
 #include "Perun/Server/Server.h"
 #include <iostream>
 #include <algorithm>
+#include <poll.h>
+#include <time.h>
 
 namespace Perun::Server {
 
@@ -260,7 +262,7 @@ void Server::DisconnectClient(ClientState& client) {
     }
 }
 
-bool Server::SendPacket(ClientState& client, Protocol::PacketType type, const std::vector<uint8_t>& payload) {
+bool Server::SendPacket(ClientState& client, Protocol::PacketType type, const std::vector<uint8_t>& payload, bool reliable) {
     if (!client.connection->IsOpen() || !client.handshakeComplete) {
         return false;
     }
@@ -273,21 +275,21 @@ bool Server::SendPacket(ClientState& client, Protocol::PacketType type, const st
     
     auto headerBytes = header.Serialize();
     
-    // Send header
-    ssize_t sent = client.connection->Send(headerBytes.data(), headerBytes.size());
-    if (sent != headerBytes.size()) {
+    // Combine header and payload into single buffer for WebSocket compatibility
+    // (WebSocket wraps each Send() call in a separate frame)
+    std::vector<uint8_t> fullPacket;
+    fullPacket.reserve(headerBytes.size() + payload.size());
+    fullPacket.insert(fullPacket.end(), headerBytes.begin(), headerBytes.end());
+    fullPacket.insert(fullPacket.end(), payload.begin(), payload.end());
+    
+    ssize_t sent = client.connection->Send(fullPacket.data(), fullPacket.size(), reliable);
+    
+    if (!reliable && sent == 0) {
+        // Dropped (expected behaviour for unreliable send on full buffer)
         return false;
     }
     
-    // Send payload
-    if (!payload.empty()) {
-        sent = client.connection->Send(payload.data(), payload.size());
-        if (sent != (ssize_t)payload.size()) {
-            return false;
-        }
-    }
-    
-    return true;
+    return sent == (ssize_t)fullPacket.size();
 }
 
 bool Server::SendVideoFrame(int clientId, const Protocol::VideoFramePacket& packet) {
@@ -299,15 +301,16 @@ bool Server::SendVideoFrame(int clientId, const Protocol::VideoFramePacket& pack
     }
     
     auto payload = packet.Serialize();
-    return SendPacket(*it, Protocol::PacketType::VideoFrame, payload);
+    // Send unreliably (drop if full)
+    return SendPacket(*it, Protocol::PacketType::VideoFrame, payload, false);
 }
 
-void Server::BroadcastVideoFrame(const Protocol::VideoFramePacket& packet) {
+void Server::BroadcastVideoFrame(const Protocol::VideoFramePacket& packet, int excludeClientId) {
     auto payload = packet.Serialize();
     
     for (auto& client : m_clients) {
-        if (client.handshakeComplete) {
-            SendPacket(client, Protocol::PacketType::VideoFrame, payload);
+        if (client.handshakeComplete && client.id != excludeClientId) {
+            SendPacket(client, Protocol::PacketType::VideoFrame, payload, false);
         }
     }
 }
@@ -324,12 +327,22 @@ bool Server::SendAudioChunk(int clientId, const Protocol::AudioChunkPacket& pack
     return SendPacket(*it, Protocol::PacketType::AudioChunk, payload);
 }
 
-void Server::BroadcastAudioChunk(const Protocol::AudioChunkPacket& packet) {
+void Server::BroadcastAudioChunk(const Protocol::AudioChunkPacket& packet, int excludeClientId) {
     auto payload = packet.Serialize();
     
     for (auto& client : m_clients) {
-        if (client.handshakeComplete && (client.capabilities & Protocol::CAP_AUDIO)) {
+        if (client.handshakeComplete && (client.capabilities & Protocol::CAP_AUDIO) && client.id != excludeClientId) {
             SendPacket(client, Protocol::PacketType::AudioChunk, payload);
+        }
+    }
+}
+
+void Server::BroadcastInputEvent(const Protocol::InputEventPacket& packet, int excludeClientId) {
+    auto payload = packet.Serialize();
+    
+    for (auto& client : m_clients) {
+        if (client.handshakeComplete && client.id != excludeClientId) {
+            SendPacket(client, Protocol::PacketType::InputEvent, payload);
         }
     }
 }
@@ -340,6 +353,63 @@ size_t Server::GetClientCount() const {
 
 bool Server::IsRunning() const {
     return m_running;
+}
+
+std::vector<int> Server::GetAllFileDescriptors() const {
+    std::vector<int> fds;
+    
+    // Add all transport listen fds
+    for (const auto& transport : m_transports) {
+        int fd = transport->GetListenFileDescriptor();
+        if (fd >= 0) {
+            fds.push_back(fd);
+        }
+    }
+    
+    // Add all client connection fds
+    for (const auto& client : m_clients) {
+        if (client.connection && client.connection->IsOpen()) {
+            int fd = client.connection->GetFileDescriptor();
+            if (fd >= 0) {
+                fds.push_back(fd);
+            }
+        }
+    }
+    
+    return fds;
+}
+
+int Server::Poll(int timeoutMs) {
+    if (!m_running) {
+        return 0;
+    }
+    
+    auto fds = GetAllFileDescriptors();
+    if (fds.empty()) {
+        // No file descriptors to poll, just sleep briefly
+        if (timeoutMs > 0) {
+            struct timespec ts;
+            ts.tv_sec = timeoutMs / 1000;
+            ts.tv_nsec = (timeoutMs % 1000) * 1000000;
+            nanosleep(&ts, nullptr);
+        }
+        return 0;
+    }
+    
+    // Build poll array
+    std::vector<struct pollfd> pollFds;
+    for (int fd : fds) {
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLIN;  // Watch for input events
+        pfd.revents = 0;
+        pollFds.push_back(pfd);
+    }
+    
+    // Poll with timeout
+    int result = poll(pollFds.data(), pollFds.size(), timeoutMs);
+    
+    return result;
 }
 
 } // namespace Perun::Server

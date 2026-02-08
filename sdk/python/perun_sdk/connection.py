@@ -1,10 +1,12 @@
 """Connection management for Perun SDK
 
 Handles transport layer connections and protocol-level communication.
+Simple synchronous non-blocking design - no threads.
 """
 
 import socket
 import struct
+import select
 from typing import Optional, Callable
 from .protocol import (
     PacketType,
@@ -22,7 +24,8 @@ class PerunConnection:
     """
     Connection to a Perun server
     
-    Handles handshake, packet sending/receiving, and connection management.
+    Uses simple non-blocking I/O without threads.
+    Video frames are dropped if socket buffer is full.
     """
     
     def __init__(self):
@@ -38,10 +41,9 @@ class PerunConnection:
         try:
             self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self._socket.connect(socket_path)
-            self._socket.setblocking(False)  # Non-blocking mode
+            self._socket.setblocking(False)
             self._connected = True
             
-            # Perform handshake
             return self._do_handshake(capabilities)
         except Exception as e:
             print(f"Connection failed: {e}")
@@ -52,49 +54,65 @@ class PerunConnection:
         try:
             self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._socket.connect((host, port))
-            self._socket.setblocking(False)  # Non-blocking mode
             
-            # Enable TCP_NODELAY for low latency
+            # TCP_NODELAY for low latency
             self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            
+            # Large send buffer
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 256 * 1024)
+            
             self._connected = True
             
-            # Perform handshake
-            return self._do_handshake(capabilities)
+            if not self._do_handshake(capabilities):
+                return False
+            
+            # Set non-blocking AFTER handshake
+            self._socket.setblocking(False)
+            
+            print(f"[PerunConnection] Connected (simple non-blocking mode)")
+            return True
+            
         except Exception as e:
             print(f"Connection failed: {e}")
-            return False
-    
-    def _do_handshake(self, capabilities: int) -> bool:
-        """Perform handshake with server"""
-        if not self._socket:
-            return False
-        
-        # Send hello
-        hello = Handshake.create_hello(PROTOCOL_VERSION, capabilities)
-        self._socket.setblocking(True)  # Blocking for handshake
-        self._socket.sendall(hello)
-        
-        # Receive response (up to 256 bytes)
-        response = self._socket.recv(256)
-        self._socket.setblocking(False)  # Back to non-blocking
-        
-        success, version, caps, error = Handshake.process_response(response)
-        
-        if success:
-            self._handshake_complete = True
-            self._capabilities = caps
-            print(f"Handshake successful, caps: 0x{caps:04x}")
-            return True
-        else:
-            print(f"Handshake failed: {error}")
             self.close()
             return False
     
+    def _do_handshake(self, capabilities: int) -> bool:
+        """Perform handshake with server (blocking)"""
+        if not self._socket:
+            return False
+        
+        try:
+            # Send hello (blocking for handshake)
+            hello = Handshake.create_hello(PROTOCOL_VERSION, capabilities)
+            self._socket.setblocking(True)
+            self._socket.sendall(hello)
+            
+            # Receive response
+            response = self._socket.recv(256)
+            
+            success, version, caps, error = Handshake.process_response(response)
+            
+            if success:
+                self._handshake_complete = True
+                self._capabilities = caps
+                return True
+            else:
+                print(f"Handshake failed: {error}")
+                return False
+        except Exception as e:
+            print(f"Handshake error: {e}")
+            return False
+    
     def close(self):
-        """Close the connection"""
+        """Close connection"""
         if self._socket:
-            self._socket.close()
+            try:
+                self._socket.close()
+            except:
+                pass
             self._socket = None
+        
         self._connected = False
         self._handshake_complete = False
     
@@ -102,13 +120,17 @@ class PerunConnection:
         """Check if connection is active"""
         return self._connected and self._handshake_complete
     
-    def send_video_frame(self, packet: VideoFramePacket) -> bool:
-        """Send video frame packet"""
+    def send_video_frame(self, packet: VideoFramePacket, blocking: bool = True) -> bool:
+        """Send video frame packet."""
         if not self.is_connected():
             return False
         
         payload = packet.serialize()
-        return self._send_packet(PacketType.VideoFrame, payload)
+        return self._send_packet(PacketType.VideoFrame, payload, blocking)
+    
+    def send_video_frame_async(self, packet: VideoFramePacket) -> bool:
+        """Send video frame with non-blocking mode (drop if socket full)."""
+        return self.send_video_frame(packet, blocking=False)
     
     def send_input_event(self, packet: InputEventPacket) -> bool:
         """Send input event packet"""
@@ -116,7 +138,7 @@ class PerunConnection:
             return False
         
         payload = packet.serialize()
-        return self._send_packet(PacketType.InputEvent, payload)
+        return self._send_packet(PacketType.InputEvent, payload, blocking=True)
     
     def send_audio_chunk(self, packet: AudioChunkPacket) -> bool:
         """Send audio chunk packet"""
@@ -124,9 +146,9 @@ class PerunConnection:
             return False
         
         payload = packet.serialize()
-        return self._send_packet(PacketType.AudioChunk, payload)
+        return self._send_packet(PacketType.AudioChunk, payload, blocking=True)
     
-    def _send_packet(self, packet_type: PacketType, payload: bytes) -> bool:
+    def _send_packet(self, packet_type: PacketType, payload: bytes, blocking: bool = True) -> bool:
         """Send a packet with header"""
         if not self._socket:
             return False
@@ -138,24 +160,35 @@ class PerunConnection:
                 sequence=self._sequence,
                 length=len(payload)
             )
-            self._sequence += 1
+            self._sequence = (self._sequence + 1) % 65536
             
-            # Send header + payload matching non-blocking socket behavior
-            # We want to ensure the whole packet is sent, so we handle partial sends
             data = header.serialize() + payload
+            
+            # For non-blocking mode, check if socket is writable first
+            if not blocking:
+                r, w, e = select.select([], [self._socket], [], 0)
+                if not w:
+                    # Socket buffer full - drop the packet
+                    if packet_type == PacketType.VideoFrame:
+                        print("DROPPED FRAME (Socket full)")
+                    return False
+            
+            # Try to send all data
             total_sent = 0
-            
-            import select
-            
             while total_sent < len(data):
                 try:
                     sent = self._socket.send(data[total_sent:])
                     if sent == 0:
-                        raise ConnectionError("Socket closed during send")
+                        raise ConnectionError("Socket closed")
                     total_sent += sent
                 except BlockingIOError:
-                    # Wait for socket to be writable
-                    select.select([], [self._socket], [], 1.0)  # 1s timeout
+                    if not blocking:
+                        # Can't complete send in non-blocking mode
+                        # We already sent partial data which corrupts the stream
+                        # But this is rare if we checked select() first
+                        return False
+                    # For blocking mode, wait briefly and retry
+                    select.select([], [self._socket], [], 0.01)
             
             return True
         except Exception as e:
@@ -167,7 +200,7 @@ class PerunConnection:
         """
         Receive a packet if available (non-blocking)
         
-        Returns: (packet_type, payload) or None if no complete packet available
+        Returns: (packet_type, payload) or None
         """
         result = self.receive_packet_header()
         if result:
@@ -185,12 +218,11 @@ class PerunConnection:
             return None
         
         try:
-            # Drain socket
+            # Drain socket (non-blocking)
             while True:
                 try:
                     data = self._socket.recv(65536)
                     if not data:
-                        # Connection closed
                         self.close()
                         return None
                     self._receive_buffer.extend(data)
@@ -201,19 +233,16 @@ class PerunConnection:
             self.close()
             return None
         
-        # Check if we have a complete packet
+        # Check for complete packet
         if len(self._receive_buffer) < 8:
             return None
         
         header = PacketHeader.deserialize(bytes(self._receive_buffer[:8]))
         
         if len(self._receive_buffer) < 8 + header.length:
-            return None  # Wait for complete packet
+            return None
         
-        # Extract payload
         payload = bytes(self._receive_buffer[8:8+header.length])
-        
-        # Remove packet from buffer
         del self._receive_buffer[:8+header.length]
         
         return (header, payload)

@@ -7,6 +7,9 @@
 #include <fcntl.h>
 #include <cstring>
 #include <iostream>
+#include <poll.h>
+#include <sys/ioctl.h>
+#include <linux/sockios.h>
 
 namespace Perun::Transport {
 
@@ -21,6 +24,10 @@ TCPConnection::TCPConnection(int fd)
     // Enable TCP_NODELAY to disable Nagle's algorithm for low latency
     int nodelay = 1;
     setsockopt(m_fd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+    
+    // Set send buffer size to 128KB to allow for bursts of video frames
+    int sndbuf = 128 * 1024;
+    setsockopt(m_fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 }
 
 TCPConnection::~TCPConnection() {
@@ -29,19 +36,62 @@ TCPConnection::~TCPConnection() {
     }
 }
 
-ssize_t TCPConnection::Send(const uint8_t* data, size_t length) {
+ssize_t TCPConnection::Send(const uint8_t* data, size_t length, bool reliable) {
     if (!m_open) {
         return -1;
     }
     
-    ssize_t sent = send(m_fd, data, length, MSG_NOSIGNAL);
-    if (sent < 0) {
-        if (errno == EPIPE || errno == ECONNRESET) {
-            // Connection closed by peer
-            Close();
+    // For unreliable sending (VideoFrames), check queue size
+    if (!reliable) {
+        int unsent = 0;
+        if (ioctl(m_fd, SIOCOUTQ, &unsent) == 0) {
+            // If more than 64KB (aprox 8 video frames) is pending, drop this frame
+            // This ensures we never build up more than ~130ms of latency
+            if (unsent > 65536) {
+                return 0;
+            }
+        } else {
+             return 0;
         }
     }
-    return sent;
+    
+    size_t totalSent = 0;
+    
+    while (totalSent < length) {
+        ssize_t sent = send(m_fd, data + totalSent, length - totalSent, MSG_NOSIGNAL);
+        
+        if (sent < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket buffer full. Wait for writeability.
+                // We MUST finish sending data to avoid stream corruption.
+                struct pollfd pfd;
+                pfd.fd = m_fd;
+                pfd.events = POLLOUT;
+                pfd.revents = 0;
+                
+                // Wait up to 100ms
+                int result = poll(&pfd, 1, 100);
+                
+                if (result <= 0) {
+                    // Timeout or error during wait
+                    // Failed to send complete packet - close connection to signal error
+                    Close();
+                    return -1;
+                }
+                continue;
+            }
+            
+            if (errno == EPIPE || errno == ECONNRESET) {
+                // Connection closed by peer
+                Close();
+            }
+            return -1;
+        }
+        
+        totalSent += sent;
+    }
+    
+    return totalSent;
 }
 
 ssize_t TCPConnection::Receive(uint8_t* buffer, size_t maxLength) {

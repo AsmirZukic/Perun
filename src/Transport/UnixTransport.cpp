@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <cstring>
 #include <iostream>
+#include <poll.h>
 
 namespace Perun::Transport {
 
@@ -23,19 +24,60 @@ UnixConnection::~UnixConnection() {
     }
 }
 
-ssize_t UnixConnection::Send(const uint8_t* data, size_t length) {
+ssize_t UnixConnection::Send(const uint8_t* data, size_t length, bool reliable) {
     if (!m_open) {
         return -1;
     }
     
-    ssize_t sent = send(m_fd, data, length, MSG_NOSIGNAL);
-    if (sent < 0) {
-        if (errno == EPIPE || errno == ECONNRESET) {
-            // Connection closed by peer
-            Close();
+    // For unreliable sending, skip if socket buffer is full
+    if (!reliable) {
+        struct pollfd pfd;
+        pfd.fd = m_fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        
+        // Check if writable immediately (0 timeout)
+        int result = poll(&pfd, 1, 0);
+        if (result <= 0) {
+            // Socket full or error, drop packet
+            return 0;
         }
     }
-    return sent;
+    
+    size_t totalSent = 0;
+    
+    while (totalSent < length) {
+        ssize_t sent = send(m_fd, data + totalSent, length - totalSent, MSG_NOSIGNAL);
+        
+        if (sent < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // Socket buffer full. Wait for writeability.
+                struct pollfd pfd;
+                pfd.fd = m_fd;
+                pfd.events = POLLOUT;
+                pfd.revents = 0;
+                
+                // Wait up to 100ms
+                int result = poll(&pfd, 1, 100);
+                
+                if (result <= 0) {
+                    Close();
+                    return -1;
+                }
+                continue;
+            }
+            
+            if (errno == EPIPE || errno == ECONNRESET) {
+                // Connection closed by peer
+                Close();
+            }
+            return -1;
+        }
+        
+        totalSent += sent;
+    }
+    
+    return totalSent;
 }
 
 ssize_t UnixConnection::Receive(uint8_t* buffer, size_t maxLength) {

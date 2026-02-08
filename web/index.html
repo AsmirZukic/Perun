@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+    <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -6,7 +6,7 @@
     <title>Perun Web Client</title>
     <style>
         body { background-color: #1a1a1a; color: #eee; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-        canvas { border: 2px solid #444; background: #000; image-rendering: pixelated; max-width: 100%; max-height: 80vh; }
+        canvas { border: 2px solid #444; background: #000; image-rendering: pixelated; width: 1280px !important; height: 640px !important; }
         #status { margin-bottom: 10px; font-weight: bold; }
         #controls { margin-top: 10px; }
         button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #333; color: #fff; border: 1px solid #555; }
@@ -15,10 +15,11 @@
 </head>
 <body>
     <div id="status">Disconnected</div>
-    <canvas id="display" width="640" height="480"></canvas>
+    <canvas id="display" width="64" height="32" style="width: 1280px; height: 640px;"></canvas>
     <div id="controls">
         <button id="connectBtn">Connect</button>
     </div>
+    <div id="debugLog" style="margin-top: 10px; font-family: monospace; font-size: 12px; color: #aaa; max-height: 200px; overflow-y: auto; width: 640px; border: 1px solid #333; padding: 5px;"></div>
 
     <script src="protocol.js"></script>
     <script src="client.js"></script>

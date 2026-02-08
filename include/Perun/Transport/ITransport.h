@@ -42,9 +42,10 @@ public:
      * @brief Send data over the connection
      * @param data Pointer to data to send
      * @param length Number of bytes to send
-     * @return Number of bytes actually sent, or -1 on error
+     * @param reliable If true, ensures delivery (may block). If false, may drop if buffer full.
+     * @return Number of bytes actually sent, 0 if dropped, or -1 on error
      */
-    virtual ssize_t Send(const uint8_t* data, size_t length) = 0;
+    virtual ssize_t Send(const uint8_t* data, size_t length, bool reliable = true) = 0;
     
     /**
      * @brief Receive data from the connection (non-blocking)
