@@ -38,3 +38,5 @@ Testing/
 
 /roms 
 /docs 
+examples/
+target/

@@ -120,17 +120,17 @@ class PerunConnection:
         """Check if connection is active"""
         return self._connected and self._handshake_complete
     
-    def send_video_frame(self, packet: VideoFramePacket, blocking: bool = True) -> bool:
+    def send_video_frame(self, packet: VideoFramePacket, flags: int = 0, blocking: bool = True) -> bool:
         """Send video frame packet."""
         if not self.is_connected():
             return False
         
         payload = packet.serialize()
-        return self._send_packet(PacketType.VideoFrame, payload, blocking)
+        return self._send_packet(PacketType.VideoFrame, payload, flags, blocking)
     
-    def send_video_frame_async(self, packet: VideoFramePacket) -> bool:
+    def send_video_frame_async(self, packet: VideoFramePacket, flags: int = 0) -> bool:
         """Send video frame with non-blocking mode (drop if socket full)."""
-        return self.send_video_frame(packet, blocking=False)
+        return self.send_video_frame(packet, flags, blocking=False)
     
     def send_input_event(self, packet: InputEventPacket) -> bool:
         """Send input event packet"""
@@ -138,7 +138,7 @@ class PerunConnection:
             return False
         
         payload = packet.serialize()
-        return self._send_packet(PacketType.InputEvent, payload, blocking=True)
+        return self._send_packet(PacketType.InputEvent, payload, 0, blocking=True)
     
     def send_audio_chunk(self, packet: AudioChunkPacket) -> bool:
         """Send audio chunk packet"""
@@ -146,9 +146,9 @@ class PerunConnection:
             return False
         
         payload = packet.serialize()
-        return self._send_packet(PacketType.AudioChunk, payload, blocking=True)
+        return self._send_packet(PacketType.AudioChunk, payload, 0, blocking=True)
     
-    def _send_packet(self, packet_type: PacketType, payload: bytes, blocking: bool = True) -> bool:
+    def _send_packet(self, packet_type: PacketType, payload: bytes, flags: int = 0, blocking: bool = True) -> bool:
         """Send a packet with header"""
         if not self._socket:
             return False
@@ -156,7 +156,7 @@ class PerunConnection:
         try:
             header = PacketHeader(
                 type=packet_type,
-                flags=0,
+                flags=flags,
                 sequence=self._sequence,
                 length=len(payload)
             )

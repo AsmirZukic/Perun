@@ -60,10 +60,12 @@ class PerunClient {
         
         new Uint8Array(buffer).set(magic, 0);
         view.setUint16(magic.length, 1, false); // Version 1 (Big Endian)
-        view.setUint16(magic.length + 2, 0, false); // No caps
+        // Request CAP_DELTA (0x01) + CAP_AUDIO (0x02) = 0x03
+        view.setUint16(magic.length + 2, Capabilities.CAP_DELTA | Capabilities.CAP_AUDIO, false);
         
         this.socket.send(buffer);
     }
+
     
     handleMessage(data) {
         if (!this.handshakeComplete) {
@@ -114,12 +116,81 @@ class PerunClient {
         
         if (type === PacketType.VideoFrame) {
             this.handleVideoFrame(payload, flags);
+        } else if (type === PacketType.AudioChunk) {
+            this.handleAudioChunk(payload);
         } else if (type === PacketType.InputEvent) {
              // Echoed input event, ignore
         } else {
             this.log("Unknown packet type: " + type);
         }
     }
+    
+    handleAudioChunk(payload) {
+        // AudioChunkPacket: sampleRate(2), channels(1), samples...
+        // For Chip-8, samples[0] > 0 means beep on, 0 means off
+        this.log(`AudioChunk received: ${payload.length} bytes`);
+        
+        if (payload.length < 5) {
+            this.log(`AudioChunk too small: ${payload.length}`);
+            return;
+        }
+        
+        const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+        // Skip sampleRate(2) + channels(1), read first sample (int16)
+        const signal = view.getInt16(3, false);
+        
+        this.log(`Audio signal: ${signal}`);
+        
+        if (signal > 0) {
+            this.startBeep();
+        } else {
+            this.stopBeep();
+        }
+    }
+
+    
+    startBeep() {
+        if (this.oscillator) return; // Already beeping
+        
+        try {
+            if (!this.audioCtx) {
+                this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            // Create oscillator for 440Hz square wave (classic beep)
+            this.oscillator = this.audioCtx.createOscillator();
+            this.oscillator.type = 'square';
+            this.oscillator.frequency.value = 440;
+            
+            // Add gain node to control volume (reduce harshness)
+            this.gainNode = this.audioCtx.createGain();
+            this.gainNode.gain.value = 0.1; // 10% volume
+            
+            this.oscillator.connect(this.gainNode);
+            this.gainNode.connect(this.audioCtx.destination);
+            this.oscillator.start();
+            
+            this.log("Beep ON");
+        } catch (e) {
+            console.error("Audio error:", e);
+        }
+    }
+    
+    stopBeep() {
+        if (this.oscillator) {
+            try {
+                this.oscillator.stop();
+            } catch (e) { /* ignore */ }
+            this.oscillator.disconnect();
+            this.oscillator = null;
+            this.log("Beep OFF");
+        }
+        if (this.gainNode) {
+            this.gainNode.disconnect();
+            this.gainNode = null;
+        }
+    }
+
     
     log(msg) {
         console.log(msg);
@@ -163,31 +234,79 @@ class PerunClient {
             const pixelDataLength = payload.byteLength - 4;
             const pixelData = new Uint8Array(payload.buffer, payload.byteOffset + 4, pixelDataLength);
             
+            // Check flags for Delta Compression (0x02)
+            const isDelta = (flags & 0x02) !== 0;
+
             // Log occasionally
             if (Math.random() < 0.02) {
-                this.log(`Frame: ${width}x${height}, bytes=${pixelDataLength}`);
+                this.log(`Frame: ${width}x${height}, bytes=${pixelDataLength}, delta=${isDelta}`);
             }
 
+            // Initialize/Resize Canvas to match source
             // Initialize/Resize Canvas to match source
             if (this.canvas.width !== width || this.canvas.height !== height) {
                 this.log(`Resize canvas: ${width}x${height}`);
                 this.canvas.width = width;
                 this.canvas.height = height;
+                this.imageData = null; // Force recreation
+                
+                // DEBUG: Fill green
+                this.ctx.fillStyle = '#00FF00';
+                this.ctx.fillRect(0,0,width,height);
             }
             
             // Ensure imageData exists
             if (!this.imageData || this.imageData.width !== width || this.imageData.height !== height) {
                 this.imageData = this.ctx.createImageData(width, height);
+                // Clear buffer (alpha 255)
+                for (let i = 3; i < this.imageData.data.length; i += 4) {
+                    this.imageData.data[i] = 255;
+                }
+            }
+
+            const target = this.imageData.data;
+            const expectedSize = width * height * 4;
+
+            // Verify payload content
+            let activeBytes = 0;
+            for(let k=0; k<pixelData.length; k++) {
+                if (pixelData[k] !== 0) activeBytes++;
+            }
+            if (activeBytes > 0) {
+                 // console.log(`Frame received: bytes=${pixelData.length}, active=${activeBytes}, isDelta=${isDelta}`);
+            } else {
+                 console.warn(`Frame received: bytes=${pixelData.length}, BUT ALL ZEROS! isDelta=${isDelta}`);
+            }
+
+            if (isDelta) {
+                // Apply XOR Delta
+                // pixelData contains the XOR diff
+                if (pixelData.length !== expectedSize) {
+                     this.log(`Delta size mismatch: got ${pixelData.length}, need ${expectedSize}`);
+                     return;
+                }
+                
+                for (let i = 0; i < expectedSize; i++) {
+                    target[i] ^= pixelData[i];
+                }
+                // Force alpha to 255 (opaque) - XOR on alpha can result in 0
+                for (let i = 3; i < expectedSize; i += 4) {
+                    target[i] = 255;
+                }
+            } else {
+                // Full Frame
+                // Copy pixels directly
+                if (pixelData.length === expectedSize) {
+                    target.set(pixelData);
+                } else {
+                    this.log(`Size mismatch: got ${pixelData.length}, need ${expectedSize}`);
+                    return;
+                }
             }
             
-            // Copy pixels directly
-            const expectedSize = width * height * 4;
-            if (pixelData.length === expectedSize) {
-                this.imageData.data.set(pixelData);
-                this.ctx.putImageData(this.imageData, 0, 0);
-            } else {
-                this.log(`Size mismatch: got ${pixelData.length}, need ${expectedSize}`);
-            }
+            // Put modified buffer to canvas
+            this.ctx.putImageData(this.imageData, 0, 0);
+
         } catch (e) {
             console.error("Error in renderFrame:", e);
             this.updateStatus("Render Error: " + e.message);
