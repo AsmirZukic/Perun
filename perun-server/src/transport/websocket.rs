@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, WebSocketStream};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{SinkExt, StreamExt, Stream, Sink};
 use tokio_tungstenite::tungstenite::Message;
 
 /// WebSocket transport
@@ -49,6 +49,8 @@ pub struct WebSocketConnection {
     read_buffer: Vec<u8>,
     /// Position in read buffer
     read_pos: usize,
+    /// Buffer for outgoing data to be sent as WebSocket frames
+    write_buffer: Vec<u8>,
     open: bool,
 }
 
@@ -58,6 +60,7 @@ impl WebSocketConnection {
             ws,
             read_buffer: Vec::new(),
             read_pos: 0,
+            write_buffer: Vec::new(),
             open: true,
         }
     }
@@ -116,17 +119,19 @@ impl Connection for WebSocketConnection {
 impl AsyncRead for WebSocketConnection {
     fn poll_read(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        // Return buffered data if available
+        // println!("[WS] poll_read called, pos={}, len={}", self.read_pos, self.read_buffer.len());
+        // 1. If we have data in the buffer, return it
         if self.read_pos < self.read_buffer.len() {
             let available = &self.read_buffer[self.read_pos..];
             let to_copy = available.len().min(buf.remaining());
             buf.put_slice(&available[..to_copy]);
             self.read_pos += to_copy;
             
-            // Clear buffer if fully consumed
+            // println!("[WS] Returning {} bytes from buffer", to_copy);
+            
             if self.read_pos >= self.read_buffer.len() {
                 self.read_buffer.clear();
                 self.read_pos = 0;
@@ -135,29 +140,81 @@ impl AsyncRead for WebSocketConnection {
             return Poll::Ready(Ok(()));
         }
 
-        // For actual async reading, use recv_binary() instead
-        // This is a simplified implementation
-        Poll::Pending
+        // 2. No data in buffer, poll the WebSocket stream
+        match Pin::new(&mut self.ws).poll_next(cx) {
+            Poll::Ready(Some(Ok(Message::Binary(data)))) => {
+                println!("[WS] Received binary message, len={}", data.len());
+                self.read_buffer = data.to_vec();
+                self.read_pos = 0;
+                
+                // Now we have data, call ourselves again for the copy logic
+                // We use self.as_mut().poll_read to avoid move issues if any
+                self.as_mut().poll_read(cx, buf)
+            }
+            Poll::Ready(Some(Ok(Message::Close(_)))) | Poll::Ready(None) => {
+                println!("[WS] Stream closed");
+                self.open = false;
+                Poll::Ready(Ok(())) // EOF
+            }
+            Poll::Ready(Some(Ok(m))) => {
+                println!("[WS] Received non-binary message: {:?}", m);
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Poll::Ready(Some(Err(e))) => {
+                println!("[WS] Stream error: {:?}", e);
+                Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e)))
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
 impl AsyncWrite for WebSocketConnection {
     fn poll_write(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         _cx: &mut Context<'_>,
-        _buf: &[u8],
+        buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        // For actual async writing, use send_binary() instead
-        Poll::Pending
+        if !self.open {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::NotConnected, "Connection closed")));
+        }
+        
+        // Just append to write buffer
+        self.write_buffer.extend_from_slice(buf);
+        Poll::Ready(Ok(buf.len()))
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Poll::Ready(Ok(()))
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.write_buffer.is_empty() {
+            return Pin::new(&mut self.ws).poll_flush(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e));
+        }
+
+        // Try to send the buffer as a binary frame
+        // We need to use ready! or handle Pending
+        match Pin::new(&mut self.ws).poll_ready(cx) {
+            Poll::Ready(Ok(())) => {
+                let data = std::mem::take(&mut self.write_buffer);
+                match Pin::new(&mut self.ws).start_send(Message::Binary(data.into())) {
+                    Ok(()) => {
+                        // After start_send, we should poll_flush the underlying sink
+                        Pin::new(&mut self.ws).poll_flush(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                    }
+                    Err(e) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+                }
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, e))),
+            Poll::Pending => Poll::Pending,
+        }
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        // Attempt to flush last data
+        if !self.write_buffer.is_empty() {
+            let _ = self.as_mut().poll_flush(cx);
+        }
         self.open = false;
-        Poll::Ready(Ok(()))
+        Pin::new(&mut self.ws).poll_close(cx).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 }
 

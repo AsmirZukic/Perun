@@ -13,126 +13,13 @@ use tracing_subscriber::FmtSubscriber;
 use perun_server::{
     Server, ServerConfig, ServerEvent, BroadcastMessage,
     transport::{tcp::TcpTransport, websocket::{WebSocketTransport, WebSocketConnection}, Transport},
-    protocol::{capabilities, Handshake, PacketHeader, PacketType, InputEventPacket},
 };
+use perun_protocol::{capabilities, Handshake, PacketHeader, PacketType, VideoFramePacket, InputEventPacket};
+mod shm;
+
 
 static WS_CLIENT_ID: AtomicU32 = AtomicU32::new(10000); // Start WS clients at 10000
 
-/// Handle a WebSocket client connection with full Perun protocol support
-async fn handle_websocket_client(
-    _server: &Arc<Server>,
-    conn: &mut WebSocketConnection,
-    broadcast_tx: broadcast::Sender<BroadcastMessage>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let client_id = WS_CLIENT_ID.fetch_add(1, Ordering::SeqCst);
-    
-    // 1. Handshake: receive HELLO
-    let hello_data = conn.recv_binary().await?
-        .ok_or_else(|| "Connection closed during handshake")?;
-    
-    let server_caps = capabilities::CAP_DELTA | capabilities::CAP_AUDIO | capabilities::CAP_DEBUG;
-    let result = Handshake::process_hello(&hello_data, server_caps)?;
-    
-    if !result.accepted {
-        let error_msg = result.error.unwrap_or_else(|| "Unknown error".to_string());
-        let error_resp = Handshake::create_error(&error_msg);
-        conn.send_binary(&error_resp).await?;
-        return Err(error_msg.into());
-    }
-    
-    // 2. Send OK response
-    let ok_resp = Handshake::create_ok(result.version, result.capabilities);
-    conn.send_binary(&ok_resp).await?;
-    
-    info!("WebSocket client {} handshake complete, caps: 0x{:04x}", client_id, result.capabilities);
-    
-    // 3. Subscribe to broadcasts
-    let mut broadcast_rx = broadcast_tx.subscribe();
-    
-    // 4. Main loop
-    loop {
-        tokio::select! {
-            // Receive from WebSocket client
-            recv_result = conn.recv_binary() => {
-                match recv_result {
-                    Ok(Some(data)) => {
-                        if data.len() >= PacketHeader::SIZE {
-                            if let Ok(header) = PacketHeader::deserialize(&data) {
-                                debug!("WS client {} packet: {:?}", client_id, header.packet_type);
-                                // Broadcast input events to emulator
-                                if header.packet_type == PacketType::InputEvent {
-                                    if let Ok(input) = InputEventPacket::deserialize(&data[PacketHeader::SIZE..]) {
-                                        debug!("WS client {} input: buttons=0x{:04x}", client_id, input.buttons);
-                                        let _ = broadcast_tx.send(BroadcastMessage::InputEvent {
-                                            packet: input,
-                                            exclude_client: Some(client_id),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        debug!("WebSocket client {} disconnected cleanly", client_id);
-                        break;
-                    }
-                    Err(e) => {
-                        debug!("WebSocket client {} recv error: {:?}", client_id, e);
-                        break;
-                    }
-                }
-            }
-            
-            // Send broadcasts to this WebSocket client
-            broadcast_result = broadcast_rx.recv() => {
-                match broadcast_result {
-                    Ok(msg) => {
-                        let (packet_type, payload, exclude) = match msg {
-                            BroadcastMessage::VideoFrame { packet, exclude_client } => {
-                                (PacketType::VideoFrame, packet.serialize(), exclude_client)
-                            }
-                            BroadcastMessage::AudioChunk { packet, exclude_client } => {
-                                (PacketType::AudioChunk, packet.serialize(), exclude_client)
-                            }
-                            BroadcastMessage::InputEvent { packet, exclude_client } => {
-                                (PacketType::InputEvent, packet.serialize(), exclude_client)
-                            }
-                        };
-                        
-                        // Don't send to excluded client
-                        if exclude == Some(client_id) {
-                            continue;
-                        }
-                        
-                        let header = PacketHeader {
-                            packet_type,
-                            flags: 0,
-                            sequence: 0,
-                            length: payload.len() as u32,
-                        };
-                        
-                        let mut data = header.serialize().to_vec();
-                        data.extend_from_slice(&payload);
-                        
-                        if let Err(e) = conn.send_binary(&data).await {
-                            warn!("WS client {} send error: {:?}", client_id, e);
-                            break;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        warn!("WS client {} lagged by {} messages", client_id, n);
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-    
-    info!("WebSocket client {} disconnected", client_id);
-    Ok(())
-}
 
 /// Perun Display Server (Rust)
 #[derive(Parser, Debug)]
@@ -154,6 +41,18 @@ struct Args {
     /// Enable debug logging
     #[arg(short, long)]
     debug: bool,
+
+    /// Shared Memory path (e.g., /dev/shm/perun)
+    #[arg(long)]
+    shm: Option<String>,
+
+    /// SHM Width (default 256)
+    #[arg(long, default_value_t = 256)]
+    width: u32,
+
+    /// SHM Height (default 224)
+    #[arg(long, default_value_t = 224)]
+    height: u32,
 }
 
 #[tokio::main]
@@ -229,9 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         
                         let server = Arc::clone(&server_clone);
                         tokio::spawn(async move {
-                            // Handle WebSocket client with full protocol support
-                            let broadcast_tx = server.broadcast_sender();
-                            if let Err(e) = handle_websocket_client(&server, &mut conn, broadcast_tx).await {
+                            if let Err(e) = server.handle_client(conn).await {
                                 error!("WebSocket client error: {:?}", e);
                             }
                         });
@@ -247,6 +144,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.unix.is_some() {
         info!("Unix socket not yet implemented in Rust version");
     }
+
+    // Initialize SHM if configured
+    let shm_host_arc = if let Some(shm_path) = args.shm {
+        info!("Initializing SHM host at {} ({}x{})", shm_path, args.width, args.height);
+        match shm::ShmHost::new(&shm_path, args.width, args.height) {
+            Ok(shm_host) => {
+                let shm_host = Arc::new(shm_host);
+                let shm_host_clone = shm_host.clone();
+                let handle = handle.clone_sender();
+                let width = args.width;
+                let height = args.height;
+                
+                // Spawn blocking thread for SHM polling
+                std::thread::spawn(move || {
+                    let mut buffer = Vec::new();
+                    let mut processor = perun_server::FrameProcessor::new();
+                    info!("SHM polling thread started");
+                    loop {
+                        if let Some((w, h)) = shm_host_clone.read_frame_into(&mut buffer) {
+                            // Process frame (Delta + Compression)
+                            let (packet, flags) = processor.process(w as u16, h as u16, &buffer);
+                            
+                            // Send to broadcast
+                            // Note: packet.data is ALREADY compressed by processor.
+                            // We need to ensure logic downstream handles this.
+                            // The server handle just forwards packet.
+                            // But `server.rs` calculates flags again?
+                            // No, `BroadcastMessage` carries the packet.
+                            // We need to pass the flags too? 
+                            // `BroadcastMessage` just has the packet and exclude_client.
+                            // The `server.rs` reconstructs headers.
+                            // We need `packet.is_delta` to be correct (it is).
+                            
+                            // count frames for debug
+                            // static FRAME_COUNT: AtomicU32 = AtomicU32::new(0); // Cannot use static in closure
+                            // ignoring count for now, just log periodically if needed
+                            // info!("Broadcasting frame");
+                            
+                            handle.broadcast_video_frame(packet, None); 
+                        } else {
+                            std::thread::sleep(std::time::Duration::from_micros(500));
+                        }
+                    }
+                });
+                Some(shm_host)
+            }
+            Err(e) => {
+                error!("Failed to initialize SHM: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     if args.tcp.is_none() && args.ws.is_none() && args.unix.is_none() {
         error!("No transport configured! Use --tcp, --ws, or --unix");
@@ -276,6 +227,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             handle.broadcast_audio_chunk(packet, Some(client_id));
                         }
                         ServerEvent::InputEventReceived { client_id, packet } => {
+                            info!("Input packet from {}: buttons=0x{:04x}, res=0x{:04x}", client_id, packet.buttons, packet.reserved);
+                            if let Some(shm) = &shm_host_arc {
+                                shm.write_inputs(packet.buttons);
+                            }
                             handle.broadcast_input_event(packet, Some(client_id));
                         }
                         ServerEvent::ConfigReceived { client_id, data } => {

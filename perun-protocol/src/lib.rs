@@ -2,8 +2,8 @@
 //! 
 //! Implements the wire protocol matching the C++ implementation.
 
-mod packets;
-mod handshake;
+pub mod packets;
+pub mod handshake;
 
 pub use packets::*;
 pub use handshake::*;

@@ -1,0 +1,35 @@
+[package]
+name = "perun-client"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+perun-protocol = { path = "../perun-protocol" }
+bytes = "1"
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "BinaryType",
+    "Blob",
+    "CanvasRenderingContext2d",
+    "CloseEvent",
+    "console",
+    "Document",
+    "Element",
+    "ErrorEvent",
+    "FileReader",
+    "HtmlCanvasElement",
+    "ImageData",
+    "MessageEvent",
+    "WebSocket",
+    "Window",
+    "Performance",
+]

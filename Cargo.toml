@@ -1,5 +1,8 @@
 [workspace]
 members = [
-    "server",
+    "cores/tetanes/tetanes-core",
+    "cores/tetanes/tetanes-perun",
+    "cores/tetanes/tetanes-utils", "perun-protocol", "perun-core", "perun-client", "perun-cli",
+    "perun-server",
 ]
 resolver = "2"

@@ -1,0 +1,11 @@
+[package]
+name = "perun-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Shared protocol definitions for Perun"
+
+[dependencies]
+bytes = "1"
+thiserror = "1"
+lz4_flex = { version = "0.11", default-features = false, features = ["std"] }
+bytemuck = "1.16"

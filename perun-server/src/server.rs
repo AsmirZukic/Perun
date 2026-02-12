@@ -2,7 +2,7 @@
 //!
 //! Manages client connections, protocol handling, and broadcasting.
 
-use crate::protocol::{
+use perun_protocol::{
     capabilities, Handshake, HandshakeResult, PacketHeader, PacketType, ProtocolError,
     VideoFramePacket, AudioChunkPacket, InputEventPacket,
 };
@@ -32,7 +32,7 @@ impl Default for ServerConfig {
         Self {
             capabilities: capabilities::CAP_DELTA | capabilities::CAP_AUDIO | capabilities::CAP_DEBUG,
             max_clients: 100,
-            broadcast_buffer: 16,
+            broadcast_buffer: 1024,
         }
     }
 }
@@ -84,6 +84,14 @@ impl ServerHandle {
     /// Broadcast an input event to all clients
     pub fn broadcast_input_event(&self, packet: InputEventPacket, exclude_client: Option<ClientId>) {
         let _ = self.broadcast_tx.send(BroadcastMessage::InputEvent { packet, exclude_client });
+    }
+
+    /// Create a clone of the handle for sending broadcasts/commands (event_rx will be None)
+    pub fn clone_sender(&self) -> Self {
+        Self {
+            broadcast_tx: self.broadcast_tx.clone(),
+            event_rx: None,
+        }
     }
 }
 
@@ -175,68 +183,126 @@ impl Server {
             capabilities: result.capabilities,
         }).await;
 
-        // Subscribe to broadcasts
+        // Split connection for full-duplex operation
+        let (mut reader, mut writer) = tokio::io::split(conn);
         let mut broadcast_rx = self.broadcast_tx.subscribe();
-
-        // Main receive loop
-        let mut recv_buf = vec![0u8; 65536];
-        let mut pending_data = Vec::new();
-
-        loop {
-            tokio::select! {
-                // Receive from client
-                read_result = conn.read(&mut recv_buf) => {
-                    match read_result {
-                        Ok(0) => {
-                            debug!("Client {} disconnected (EOF)", client_id);
-                            break;
-                        }
-                        Ok(n) => {
-                            pending_data.extend_from_slice(&recv_buf[..n]);
-                            
-                            // Process complete packets
-                            while pending_data.len() >= PacketHeader::SIZE {
-                                let header = match PacketHeader::deserialize(&pending_data) {
-                                    Ok(h) => h,
-                                    Err(_) => break,
-                                };
-                                
-                                let total_len = PacketHeader::SIZE + header.length as usize;
-                                if pending_data.len() < total_len {
-                                    break;
-                                }
-                                
-                                let payload = &pending_data[PacketHeader::SIZE..total_len];
-                                self.handle_packet(client_id, &header, payload).await;
-                                
-                                pending_data.drain(..total_len);
+        let event_tx = self.event_tx.clone();
+        
+        // This is a bit complex with select! if we want to handle both, 
+        // but we can spawn the broadcast sender and keep the read loop here.
+        
+        let write_task = async move {
+            info!("Starting write task for client {}", client_id);
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(msg) => {
+                        let (packet_type, payload, flags, exclude) = match msg {
+                            BroadcastMessage::VideoFrame { packet, exclude_client } => {
+                                (PacketType::VideoFrame, packet.serialize(false), packet.extra_flags, exclude_client)
                             }
+                            BroadcastMessage::AudioChunk { packet, exclude_client } => {
+                                (PacketType::AudioChunk, packet.serialize(), 0, exclude_client)
+                            }
+                            BroadcastMessage::InputEvent { packet, exclude_client } => {
+                                (PacketType::InputEvent, packet.serialize(), 0, exclude_client)
+                            }
+                        };
+                        
+                        if exclude == Some(client_id) {
+                            continue;
                         }
-                        Err(e) => {
-                            warn!("Client {} read error: {}", client_id, e);
-                            break;
+        
+                        let header = PacketHeader {
+                            packet_type,
+                            flags,
+                            sequence: 0,
+                            length: payload.len() as u32,
+                        };
+                        
+                        let mut combined_data = Vec::with_capacity(PacketHeader::SIZE + payload.len());
+                        combined_data.extend_from_slice(&header.serialize());
+                        combined_data.extend_from_slice(&payload);
+        
+                        if writer.write_all(&combined_data).await.is_err() { 
+                             warn!("Failed to write packet to client {}", client_id);
+                             break; 
+                        }
+                        if writer.flush().await.is_err() { 
+                            warn!("Failed to flush to client {}", client_id);
+                            break; 
                         }
                     }
-                }
-                
-                // Send broadcasts to this client
-                broadcast_result = broadcast_rx.recv() => {
-                    match broadcast_result {
-                        Ok(msg) => {
-                            if let Err(e) = self.send_broadcast(&mut conn, client_id, msg).await {
-                                warn!("Client {} send error: {:?}", client_id, e);
-                                break;
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("Client {} lagged by {} messages", client_id, n);
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            break;
-                        }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!("Client {} lagged, skipped {} messages", client_id, skipped);
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        info!("Broadcast channel closed for client {}", client_id);
+                        break;
                     }
                 }
             }
+            debug!("Broadcast loop ended for client {}", client_id);
+            Ok::<(), ProtocolError>(())
+        };
+
+        let read_task = async move {
+            info!("Starting read task for client {}", client_id);
+            let mut recv_buf = vec![0u8; 65536];
+            let mut pending_data = Vec::new();
+            
+            loop {
+                match reader.read(&mut recv_buf).await {
+                    Ok(0) => {
+                        info!("Read 0 bytes (EOF) from client {}", client_id);
+                        break;
+                    },
+                    Ok(n) => {
+                        pending_data.extend_from_slice(&recv_buf[..n]);
+                        while pending_data.len() >= PacketHeader::SIZE {
+                            let header = match PacketHeader::deserialize(&pending_data) {
+                                Ok(h) => h,
+                                Err(_) => break,
+                            };
+                            let total_len = PacketHeader::SIZE + header.length as usize;
+                            if pending_data.len() < total_len { break; }
+                            
+                            let payload = &pending_data[PacketHeader::SIZE..total_len];
+                            
+                            // Handle packet logic (Send to events)
+                            match header.packet_type {
+                                PacketType::InputEvent => {
+                                    if let Ok(packet) = InputEventPacket::deserialize(payload) {
+                                        let _ = event_tx.send(ServerEvent::InputEventReceived { client_id, packet }).await;
+                                    }
+                                }
+                                PacketType::VideoFrame => {
+                                     if let Ok(packet) = VideoFramePacket::deserialize(payload, header.flags) {
+                                        let _ = event_tx.send(ServerEvent::VideoFrameReceived { client_id, packet }).await;
+                                     }
+                                }
+                                _ => {
+                                    info!("Client {} sent packet type {:?}", client_id, header.packet_type);
+                                }
+                            }
+                            
+                            pending_data.drain(..total_len);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Read error from client {}: {}", client_id, e);
+                        break;
+                    },
+                }
+            }
+            info!("Read task loop ended for client {}", client_id);
+            Ok::<(), ProtocolError>(())
+        };
+
+        // Run both tasks, stop if either fails or completes
+        tokio::select! {
+            result = write_task => info!("Write task finished for client {}: {:?}", client_id, result),
+            result = read_task => info!("Read task finished for client {}: {:?}", client_id, result),
         }
 
         // Cleanup
@@ -248,6 +314,7 @@ impl Server {
     }
 
     async fn handle_packet(&self, client_id: ClientId, header: &PacketHeader, payload: &[u8]) {
+        info!("Handling packet from client {}: type={:?}, len={}", client_id, header.packet_type, payload.len());
         match header.packet_type {
             PacketType::VideoFrame => {
                 match VideoFramePacket::deserialize(payload, header.flags) {
@@ -305,7 +372,7 @@ impl Server {
     {
         let (packet_type, payload, exclude) = match &msg {
             BroadcastMessage::VideoFrame { packet, exclude_client } => {
-                (PacketType::VideoFrame, packet.serialize(), *exclude_client)
+                (PacketType::VideoFrame, packet.serialize(false), *exclude_client)
             }
             BroadcastMessage::AudioChunk { packet, exclude_client } => {
                 (PacketType::AudioChunk, packet.serialize(), *exclude_client)
@@ -323,11 +390,7 @@ impl Server {
         let header = PacketHeader {
             packet_type,
             flags: if let BroadcastMessage::VideoFrame { packet, .. } = &msg {
-                if packet.is_delta {
-                    crate::protocol::flags::FLAG_DELTA
-                } else {
-                    0
-                }
+                packet.extra_flags // Use the flags computed by Processor
             } else {
                 0
             },
@@ -444,6 +507,7 @@ mod tests {
             width: 64,
             height: 32,
             is_delta: false,
+            extra_flags: 0,
             data: vec![0xFF; 100],
         };
         handle.broadcast_video_frame(frame, None);

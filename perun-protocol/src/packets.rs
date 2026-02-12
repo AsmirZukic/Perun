@@ -102,16 +102,23 @@ pub struct VideoFramePacket {
     pub width: u16,
     pub height: u16,
     pub is_delta: bool,
+    pub extra_flags: u8,
     pub data: Vec<u8>,
 }
 
 impl VideoFramePacket {
     /// Serialize to payload bytes (excluding header)
-    pub fn serialize(&self) -> Vec<u8> {
+    pub fn serialize(&self, use_compression: bool) -> Vec<u8> {
         let mut buf = Vec::with_capacity(4 + self.data.len());
         buf.put_u16(self.width);
         buf.put_u16(self.height);
-        buf.extend_from_slice(&self.data);
+        
+        if use_compression {
+            let compressed = lz4_flex::compress_prepend_size(&self.data);
+            buf.extend_from_slice(&compressed);
+        } else {
+            buf.extend_from_slice(&self.data);
+        }
         buf
     }
 
@@ -127,12 +134,24 @@ impl VideoFramePacket {
         let mut cursor = std::io::Cursor::new(data);
         let width = cursor.get_u16();
         let height = cursor.get_u16();
-        let frame_data = data[4..].to_vec();
+        
+        let payload = &data[4..];
+        
+        // Check compression flag
+        let is_compressed = (flags & flags::FLAG_COMPRESS_1) != 0 || (flags & flags::FLAG_COMPRESS_2) != 0;
+        
+        let frame_data = if is_compressed {
+            lz4_flex::decompress_size_prepended(payload)
+                .map_err(|_| ProtocolError::InvalidData)?
+        } else {
+            payload.to_vec()
+        };
 
         Ok(Self {
             width,
             height,
             is_delta: (flags & flags::FLAG_DELTA) != 0,
+            extra_flags: flags,
             data: frame_data,
         })
     }
@@ -284,10 +303,11 @@ mod tests {
             width: 64,
             height: 32,
             is_delta: false,
+            extra_flags: 0,
             data: vec![0xFF, 0x00, 0xAB, 0xCD],
         };
 
-        let bytes = original.serialize();
+        let bytes = original.serialize(false);
         let decoded = VideoFramePacket::deserialize(&bytes, 0).unwrap();
 
         assert_eq!(original.width, decoded.width);
@@ -301,14 +321,16 @@ mod tests {
             width: 64,
             height: 32,
             is_delta: true,
+            extra_flags: flags::FLAG_DELTA,
             data: vec![0x12, 0x34],
         };
 
-        let bytes = original.serialize();
+        let bytes = original.serialize(false);
         // Pass FLAG_DELTA (0x01) during deserialization
         let decoded = VideoFramePacket::deserialize(&bytes, flags::FLAG_DELTA).unwrap();
 
         assert_eq!(decoded.is_delta, true);
+        assert_eq!(decoded.extra_flags, flags::FLAG_DELTA);
         assert_eq!(decoded.data, original.data);
     }
 
@@ -318,10 +340,11 @@ mod tests {
             width: 320,
             height: 240,
             is_delta: false,
+            extra_flags: 0,
             data: vec![],
         };
 
-        let bytes = original.serialize();
+        let bytes = original.serialize(false);
         assert_eq!(bytes.len(), 4); // Just width + height
 
         let decoded = VideoFramePacket::deserialize(&bytes, 0).unwrap();

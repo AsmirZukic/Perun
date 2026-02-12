@@ -137,7 +137,7 @@ impl Handshake {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::capabilities::*;
+    use crate::capabilities::*;
 
     #[test]
     fn test_hello_format() {

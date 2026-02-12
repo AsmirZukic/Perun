@@ -1,0 +1,12 @@
+[package]
+name = "perun-core"
+version = "0.1.0"
+edition = "2021"
+description = "SDK for building Perun emulator cores"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.10"
+memmap2 = "0.9"
+perun-shm = { path = "../cores/shm" }
+thiserror = "1"

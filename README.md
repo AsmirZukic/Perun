@@ -1,115 +1,64 @@
 # Perun - Universal Emulator Frontend Platform
 
-**Perun** is a high-performance, network-transparent emulator frontend platform built in C++. It enables emulator cores to run anywhere (locally, in containers, on remote servers) while providing a consistent interface for rendering, input, and audio streaming.
+**Perun** is a high-performance, network-transparent emulator frontend platform built in Rust. It enables emulator cores to run on a server while streaming video, audio, and input to clients (Web/WASM, Native) with minimal latency.
 
 ## Features
 
-- **Protocol Layer**: Efficient binary protocol for video frames, audio chunks, and input events
-- **Transport Abstraction**: Support for Unix sockets, TCP, and WebSocket transports
-- **Delta Compression**: XOR-based delta frames with LZ4 compression for minimal bandwidth
-- **Multi-Client Support**: Multiple clients can connect and control the same emulator session
-- **Platform SDKs**: Python SDK for easy emulator core integration
-- **Native Client**: OpenGL-based client for high-performance local rendering
-- **Debug Overlay**: ImGui-based debug interface for monitoring performance
+-   **High Performance**: Uses `ShmState` (Shared Memory) for zero-copy communication between emulator cores and the server locally.
+-   **Web Native**: Fully functional WASM client runs in the browser.
+-   **Rust Ecosystem**: Server, Client, and SDK are all pure Rust.
+-   **Unified CLI**: Managing the entire system is done via `perun-cli`.
 
 ## Architecture
 
 ```
-┌─────────────┐         ┌──────────────┐         ┌─────────────┐
-│  Emulator   │ <─SDK─> │ Perun Server │ <─Net─> │   Clients   │
-│    Core     │         │  (Protocol)  │         │ (Renderer)  │
-└─────────────┘         └──────────────┘         └─────────────┘
-```
-
-- **Emulator Core**: Runs the actual emulation (Python, C++, etc.)
-- **Perun Server**: Handles protocol, transport, and client connections
-- **Clients**: Render video, play audio, send input (native, web, mobile)
-
-## Prerequisites
-
-- **Compiler**: C++20 compliant compiler (`g++`, `clang++`, or `MSVC`)
-- **Tools**: `CMake` 3.14+, `Make` or `Ninja`
-- **Libraries**:
-    - `SDL2` (Development files)
-    - `SDL2_image` (Development files)
-    - `OpenGL`
-    - `lz4` (for compression)
-
-## Building
-
-```bash
-# Clone the repository
-git clone <repo-url> Perun
-cd Perun
-
-# Configure and Build
-cmake -S . -B build
-cmake --build build
-
-# Run the Server
-./build/perun-server --tcp 0.0.0.0:9000
-```
-
-## Testing
-
-Perun uses **GoogleTest** for verification.
-
-```bash
-cd build
-ctest --output-on-failure
+┌─────────────┐         ┌──────────────┐         ┌──────────────┐
+│  Emulator   │ <─SHM─> │ Perun Server │ <─Net─> │ Perun Client │
+│ (Adapter)   │         │   (Rust)     │         │ (WASM/Native)│
+└─────────────┘         └──────────────┘         └──────────────┘
 ```
 
 ## Quick Start
 
-### 1. Start the Perun Server
+### Prerequisites
+-   Rust (stable)
+-   `wasm-pack` (for building the web client)
 
+### Usage
+
+The `perun-cli` is your main entrypoint. It handles building components, starting the server, and launching the emulator core.
+
+#### 1. Start NES Demo
 ```bash
-# TCP mode (for network access)
-./build/perun-server --tcp 0.0.0.0:9000
-
-# Unix socket mode (for local IPC)
-./build/perun-server --unix /tmp/perun.sock
+cargo run --bin perun-cli -- start nes path/to/rom.nes
 ```
 
-### 2. Create an Emulator Core (Python)
-
-```python
-from perun_sdk import PerunCore, PerunConnection
-
-class MyEmulator(PerunCore):
-    def tick(self, input_state: int) -> tuple[bytes, bytes]:
-        # Run one frame of emulation
-        vram = self.generate_frame()  # RGBA pixel data
-        audio = self.generate_audio()  # PCM samples
-        return vram, audio
-    
-    def get_config(self) -> dict:
-        return {"width": 256, "height": 240, "fps": 60}
-
-# Connect and run
-core = MyEmulator()
-conn = PerunConnection("tcp://localhost:9000")
-conn.connect()
-conn.run(core)
-```
-
-### 3. Connect a Client
-
+#### 2. Start Chip-8 Demo
 ```bash
-# Native client (C++)
-./build/perun-client --connect tcp://localhost:9000
-
-# Web client (browser)
-# Open http://localhost:8080 in your browser
+cargo run --bin perun-cli -- start chip8 path/to/rom.ch8
 ```
 
-## SDK Documentation
+#### 3. Start Custom Core
+You can launch any compatible core adapter binary:
+```bash
+cargo run --bin perun-cli -- start my-core path/to/rom --width 320 --height 240
+```
+*(This looks for an executable named `my-core` in your path)*
 
-See `sdk/python/README.md` for detailed Python SDK documentation.
+### Building Components
+To just build everything without running:
+```bash
+cargo run --bin perun-cli -- build
+```
 
-## Protocol Specification
+## Developing Cores
 
-See `docs/protocol.md` for the complete protocol specification.
+Perun uses an **Adapter Pattern**. To support a new emulator, create a small Rust binary dealing with `perun-core` that:
+1.  Implements the `PerunCore` trait.
+2.  Links to your emulator library.
+3.  Handles the main loop via `perun_core::run`.
+
+See `perun-core` documentation for details.
 
 ## License
 MIT
